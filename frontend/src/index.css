@@ -26,9 +26,9 @@
   --color-warning-bg: #fef3c7;
   --color-warning-border: #fde68a;
 
-  --color-success: #059669;
-  --color-success-bg: #d1fae5;
-  --color-success-border: #a7f3d0;
+  --color-success: #64748b;
+  --color-success-bg: #f1f5f9;
+  --color-success-border: #cbd5e1;
 }
 
 * {
@@ -143,7 +143,7 @@ header {
 /* Dashboard Layout Grid */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr 320px 420px;
+  grid-template-columns: 2fr 300px 380px;
   flex: 1;
   height: calc(100vh - 65px);
   overflow: hidden;
@@ -496,6 +496,7 @@ tr.fraud.active {
 .flag-pill.zero {
   background: var(--color-success-bg);
   color: var(--color-success);
+  border: 1px solid var(--color-success-border);
 }
 
 .flag-pill.warn {

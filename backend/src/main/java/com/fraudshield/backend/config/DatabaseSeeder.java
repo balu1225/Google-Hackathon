@@ -4,6 +4,7 @@ import com.fraudshield.backend.model.User;
 import com.fraudshield.backend.repository.UserRepository;
 import com.fraudshield.backend.repository.TransactionRepository;
 import com.fraudshield.backend.repository.FraudCaseRepository;
+import com.fraudshield.backend.service.IngestionService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,9 @@ public class DatabaseSeeder implements CommandLineRunner {
 
     @Autowired
     private FraudCaseRepository fraudCaseRepository;
+
+    @Autowired
+    private IngestionService ingestionService;
 
     @Override
     public void run(String... args) throws Exception {
@@ -56,6 +60,10 @@ public class DatabaseSeeder implements CommandLineRunner {
         charlie.setAverageTransactionValue(80.0);
         userRepository.save(charlie);
 
-        System.out.println("Database successfully seeded with Alice, Bob, and Charlie!");
+        System.out.println("Database successfully seeded with Alice, Bob, and Charlie profiles.");
+
+        // Bulk load all sample transactions from CSV on startup
+        ingestionService.bulkLoad("sample_transactions.csv");
+        System.out.println("Successfully seeded database with all baseline transactions!");
     }
 }

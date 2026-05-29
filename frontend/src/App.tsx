@@ -105,10 +105,16 @@ function App() {
         const payload = JSON.parse(event.data);
         if (payload.type === "TRANSACTION") {
           const newTxn: Transaction = payload.data;
-          setTransactions(prev => [newTxn, ...prev]);
+          setTransactions(prev => {
+            if (prev.some(t => t.transactionId === newTxn.transactionId)) return prev;
+            return [newTxn, ...prev];
+          });
         } else if (payload.type === "FRAUD_CASE") {
           const newCase: FraudCase = payload.data;
-          setCases(prev => [newCase, ...prev]);
+          setCases(prev => {
+            if (prev.some(c => c.id === newCase.id || c.transactionId === newCase.transactionId)) return prev;
+            return [newCase, ...prev];
+          });
         } else if (payload.type === "CASE_UPDATE") {
           const updatedCase: FraudCase = payload.data;
           setCases(prev => prev.map(c => c.id === updatedCase.id ? updatedCase : c));
@@ -120,6 +126,15 @@ function App() {
           if (payload.message === "Ingestion stopped") {
             setIsIngesting(false);
           }
+        } else if (payload.type === "BULK_LOAD_COMPLETE") {
+          setIsIngesting(false);
+          // Re-fetch everything
+          fetch(`${API_BASE}/cases`)
+            .then(res => res.json())
+            .then(data => setCases(data.reverse()));
+          fetch(`${API_BASE}/transactions`)
+            .then(res => res.json())
+            .then(data => setTransactions(data.reverse()));
         }
       } catch (e) {
         if (event.data.includes("Connected")) {
@@ -135,6 +150,17 @@ function App() {
     fetch(`${API_BASE}/ingest/start?filePath=${encodeURIComponent(filePath)}`, {
       method: "POST"
     })
+      .catch(() => setIsIngesting(false));
+  };
+
+  const triggerBulkLoad = () => {
+    setIsIngesting(true);
+    fetch(`${API_BASE}/ingest/bulk?filePath=${encodeURIComponent(filePath)}`, {
+      method: "POST"
+    })
+      .then(res => {
+        if (!res.ok) setIsIngesting(false);
+      })
       .catch(() => setIsIngesting(false));
   };
 
@@ -208,7 +234,7 @@ function App() {
               width: '8px', 
               height: '8px', 
               borderRadius: '50%', 
-              backgroundColor: wsStatus === 'connected' ? 'var(--color-success)' : 'var(--color-warning)',
+              backgroundColor: wsStatus === 'connected' ? '#2563eb' : '#dc2626',
             }} />
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>
               WebSocket: {wsStatus}
@@ -240,9 +266,14 @@ function App() {
                 Stop Ingest
               </button>
             ) : (
-              <button onClick={startIngestion} className="btn btn-primary">
-                Start Ingest
-              </button>
+              <>
+                <button onClick={startIngestion} className="btn btn-primary">
+                  Stream Feed
+                </button>
+                <button onClick={triggerBulkLoad} className="btn btn-secondary">
+                  Bulk Load
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -273,7 +304,7 @@ function App() {
                       <th>Location</th>
                       <th>Device</th>
                       <th>Category</th>
-                      <th>Audit Flags</th>
+                      <th>Flags</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -308,11 +339,11 @@ function App() {
                           <td style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{t.merchantCategory}</td>
                           <td>
                             {flags.count > 0 ? (
-                              <span className={`flag-pill ${flags.count >= 3 ? 'alert' : 'warn'}`}>
-                                {flags.count} {flags.count === 1 ? 'Flag' : 'Flags'} ({flags.list.join(', ')})
+                              <span className={`flag-pill ${flags.count >= 2 ? 'alert' : 'warn'}`}>
+                                {flags.count} {flags.count === 1 ? 'Flag' : 'Flags'}
                               </span>
                             ) : (
-                              <span className="flag-pill zero">Clear</span>
+                              <span className="flag-pill zero">0 Flags</span>
                             )}
                           </td>
                         </tr>
@@ -435,14 +466,14 @@ function App() {
                     <div className="score-row">
                       <span className="score-lbl">Risk Score Assessment</span>
                       <span className="score-num" style={{
-                        color: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-success)'
+                        color: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)'
                       }}>{(selectedCase.riskScore * 100).toFixed(0)}%</span>
                     </div>
 
                     <div className="score-bar-bg">
                       <div className="score-bar-fg" style={{
                         width: `${selectedCase.riskScore * 100}%`,
-                        backgroundColor: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-success)',
+                        backgroundColor: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)',
                       }} />
                     </div>
 
@@ -462,16 +493,16 @@ function App() {
                   ) : (
                     <div style={{ 
                       marginTop: '1rem', 
-                      background: 'var(--color-success-bg)', 
-                      border: '1px solid var(--color-success-border)', 
+                      background: '#f8fafc', 
+                      border: '1px solid #cbd5e1', 
                       padding: '1rem', 
                       borderRadius: '8px',
-                      color: 'var(--color-success)'
+                      color: '#1e3a8a'
                     }}>
                       <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
                         Approved Transaction
                       </div>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      <p style={{ fontSize: '0.75rem', color: '#475569' }}>
                         This transaction perfectly aligns with the cardholder's baseline behavioral profile. No anomalies flagged.
                       </p>
                     </div>

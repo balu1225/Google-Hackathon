@@ -19,6 +19,12 @@ public class IngestionController {
         return ResponseEntity.ok("Ingestion started successfully for file: " + filePath);
     }
 
+    @PostMapping("/bulk")
+    public ResponseEntity<String> bulkLoad(@RequestParam String filePath) {
+        ingestionService.bulkLoad(filePath);
+        return ResponseEntity.ok("Bulk ingestion completed successfully for file: " + filePath);
+    }
+
     @PostMapping("/stop")
     public ResponseEntity<String> stopIngestion() {
         ingestionService.stopIngestion();

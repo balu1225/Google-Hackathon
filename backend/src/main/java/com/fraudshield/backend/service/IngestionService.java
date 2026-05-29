@@ -12,7 +12,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -43,12 +46,41 @@ public class IngestionService {
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private boolean isIngesting = false;
 
+    private BufferedReader getBufferedReader(String filePath) throws Exception {
+        File file = new File(filePath);
+        if (file.exists()) {
+            return new BufferedReader(new FileReader(file));
+        }
+
+        // Try resource stream from ClassLoader
+        InputStream is = getClass().getClassLoader().getResourceAsStream(filePath);
+        if (is == null) {
+            // Strip folder prefix if it's there
+            String filename = filePath;
+            if (filePath.contains("/")) {
+                filename = filePath.substring(filePath.lastIndexOf("/") + 1);
+            }
+            is = getClass().getClassLoader().getResourceAsStream(filename);
+        }
+
+        if (is == null) {
+            // Try prefixing with backend/
+            File fileWithBackend = new File("backend/" + filePath);
+            if (fileWithBackend.exists()) {
+                return new BufferedReader(new FileReader(fileWithBackend));
+            }
+            throw new java.io.FileNotFoundException("Could not resolve file path: " + filePath);
+        }
+
+        return new BufferedReader(new InputStreamReader(is));
+    }
+
     public void startIngestion(String filePath) {
         if (isIngesting) return;
         isIngesting = true;
 
         executorService.submit(() -> {
-            try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
+            try (BufferedReader br = getBufferedReader(filePath)) {
                 String line;
                 boolean isFirstLine = true;
                 while ((line = br.readLine()) != null && isIngesting) {
@@ -57,69 +89,10 @@ public class IngestionService {
                         continue; // skip header
                     }
 
-                    String[] parts = line.split(",");
-                    if (parts.length >= 10) {
-                        Transaction t = new Transaction();
-                        t.setTransactionId(parts[0]);
-                        t.setTimestamp(LocalDateTime.parse(parts[1]));
-                        t.setSenderAccount(parts[2]);
-                        t.setReceiverAccount(parts[3]);
-                        t.setAmount(Double.parseDouble(parts[4]));
-                        t.setTransactionType(parts[5]);
-                        t.setMerchantCategory(parts[6]);
-                        t.setLocation(parts[7]);
-                        t.setDeviceUsed(parts[8]);
-                        t.setIsFraud(Boolean.parseBoolean(parts[9]));
-
-                        // Check user baseline behaviors
-                        Optional<User> userOpt = userRepository.findByAccountId(t.getSenderAccount());
-                        if (userOpt.isPresent()) {
-                            User user = userOpt.get();
-                            boolean locationMismatch = !user.getFrequentLocations().contains(t.getLocation());
-                            boolean deviceMismatch = !user.getFrequentDevices().contains(t.getDeviceUsed());
-                            boolean amountAnomaly = t.getAmount() > (user.getAverageTransactionValue() * 2.0);
-
-                            if (locationMismatch || deviceMismatch || amountAnomaly || t.getIsFraud()) {
-                                // Suspected fraud case!
-                                t.setIsFraud(true);
-
-                                // Trigger Gemini analysis
-                                List<Transaction> history = transactionRepository.findTop5BySenderAccountOrderByTimestampDesc(t.getSenderAccount());
-                                GeminiService.GeminiAnalysisResult analysis = geminiService.analyzeTransaction(t, user, history);
-
-                                FraudCase fraudCase = new FraudCase();
-                                fraudCase.setTransactionId(t.getTransactionId());
-                                fraudCase.setAccountId(t.getSenderAccount());
-                                fraudCase.setDetectedAt(LocalDateTime.now());
-                                fraudCase.setAiReasoning(analysis.getDetailedReasoning());
-                                fraudCase.setRiskScore(analysis.getRiskScore());
-                                fraudCase.setStatus("OPEN");
-
-                                fraudCaseRepository.save(fraudCase);
-
-                                // Broadcast fraud alert
-                                try {
-                                    String alertJson = String.format("{\"type\":\"FRAUD_CASE\",\"data\":%s}", 
-                                            objectMapper.writeValueAsString(fraudCase));
-                                    webSocketHandler.broadcast(alertJson);
-                                } catch (Exception ex) {
-                                    ex.printStackTrace();
-                                }
-                            }
-                        }
-
-                        transactionRepository.save(t);
-
-                        // Broadcast transaction event
-                        try {
-                            String txnJson = String.format("{\"type\":\"TRANSACTION\",\"data\":%s}", 
-                                    objectMapper.writeValueAsString(t));
-                            webSocketHandler.broadcast(txnJson);
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
-                        }
-
-                        // Simulate real-time delay (e.g. 1000ms per transaction for better visual speed on UI)
+                    Transaction t = parseLine(line);
+                    if (t != null) {
+                        processTransaction(t);
+                        // Simulate real-time delay (e.g. 1000ms per transaction)
                         Thread.sleep(1000);
                     }
                 }
@@ -131,6 +104,101 @@ public class IngestionService {
                 webSocketHandler.broadcast("{\"type\":\"SYSTEM\",\"message\":\"Ingestion stopped\"}");
             }
         });
+    }
+
+    public void bulkLoad(String filePath) {
+        try (BufferedReader br = getBufferedReader(filePath)) {
+            String line;
+            boolean isFirstLine = true;
+            while ((line = br.readLine()) != null) {
+                if (isFirstLine) {
+                    isFirstLine = false;
+                    continue; // skip header
+                }
+
+                Transaction t = parseLine(line);
+                if (t != null) {
+                    processTransaction(t);
+                }
+            }
+            // Broadcast that bulk load is complete
+            webSocketHandler.broadcast("{\"type\":\"BULK_LOAD_COMPLETE\"}");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private Transaction parseLine(String line) {
+        String[] parts = line.split(",");
+        if (parts.length >= 10) {
+            try {
+                Transaction t = new Transaction();
+                t.setTransactionId(parts[0]);
+                t.setTimestamp(LocalDateTime.parse(parts[1]));
+                t.setSenderAccount(parts[2]);
+                t.setReceiverAccount(parts[3]);
+                t.setAmount(Double.parseDouble(parts[4]));
+                t.setTransactionType(parts[5]);
+                t.setMerchantCategory(parts[6]);
+                t.setLocation(parts[7]);
+                t.setDeviceUsed(parts[8]);
+                t.setIsFraud(Boolean.parseBoolean(parts[9]));
+                return t;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+    private void processTransaction(Transaction t) {
+        // Check user baseline behaviors
+        Optional<User> userOpt = userRepository.findByAccountId(t.getSenderAccount());
+        if (userOpt.isPresent()) {
+            User user = userOpt.get();
+            boolean locationMismatch = !user.getFrequentLocations().contains(t.getLocation());
+            boolean deviceMismatch = !user.getFrequentDevices().contains(t.getDeviceUsed());
+            boolean amountAnomaly = t.getAmount() > (user.getAverageTransactionValue() * 2.0);
+
+            if (locationMismatch || deviceMismatch || amountAnomaly || t.getIsFraud()) {
+                // Suspected fraud case!
+                t.setIsFraud(true);
+
+                // Trigger Gemini analysis
+                List<Transaction> history = transactionRepository.findTop5BySenderAccountOrderByTimestampDesc(t.getSenderAccount());
+                GeminiService.GeminiAnalysisResult analysis = geminiService.analyzeTransaction(t, user, history);
+
+                FraudCase fraudCase = new FraudCase();
+                fraudCase.setTransactionId(t.getTransactionId());
+                fraudCase.setAccountId(t.getSenderAccount());
+                fraudCase.setDetectedAt(LocalDateTime.now());
+                fraudCase.setAiReasoning(analysis.getDetailedReasoning());
+                fraudCase.setRiskScore(analysis.getRiskScore());
+                fraudCase.setStatus("OPEN");
+
+                fraudCaseRepository.save(fraudCase);
+
+                // Broadcast fraud alert
+                try {
+                    String alertJson = String.format("{\"type\":\"FRAUD_CASE\",\"data\":%s}", 
+                            objectMapper.writeValueAsString(fraudCase));
+                    webSocketHandler.broadcast(alertJson);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+        }
+
+        transactionRepository.save(t);
+
+        // Broadcast transaction event
+        try {
+            String txnJson = String.format("{\"type\":\"TRANSACTION\",\"data\":%s}", 
+                    objectMapper.writeValueAsString(t));
+            webSocketHandler.broadcast(txnJson);
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
     }
 
     public void stopIngestion() {
