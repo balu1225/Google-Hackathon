@@ -38,6 +38,58 @@ This file maintains the active development context, current state, completed wor
 
 ---
 
+## 📊 System Architecture & Data Flow
+
+```mermaid
+graph TD
+    subgraph Client ["React Frontend (Vite)"]
+        UI["Dashboard UI"]
+        WSClient["WebSocket Client"]
+        Controls["Start/Stop Stream"]
+    end
+
+    subgraph Server ["Spring Boot Backend"]
+        Ingest["IngestionService"]
+        Controller["FraudCaseController"]
+        Rules["Heuristic Anomaly Checker"]
+        Gemini["GeminiService"]
+        WSHHandler["LiveStreamWebSocketHandler"]
+    end
+
+    subgraph DB ["Database (MongoDB)"]
+        TxnColl[("transactions collection")]
+        UserColl[("users collection")]
+        CaseColl[("fraud_cases collection")]
+    end
+
+    CSV["sample_transactions.csv"] -->|Reads row| Ingest
+    Controls -->|POST /api/ingest/start| Controller
+    Controller -->|Triggers| Ingest
+    Ingest -->|1. Find sender profile| UserColl
+    Ingest -->|2. Check heuristic rules| Rules
+    
+    Rules -->|No Anomaly| SaveTxn["Save Transaction"]
+    Rules -->|Anomaly Detected| FlagTxn["Flag Anomaly & Call Gemini"]
+    
+    FlagTxn -->|Prompts with context| Gemini
+    Gemini -->|Returns structured JSON| SaveCase["Save FraudCase to DB"]
+    SaveCase -->|Write| CaseColl
+    
+    SaveTxn -->|Write| TxnColl
+    
+    SaveTxn -->|3. Broadcast| WSHHandler
+    SaveCase -->|3. Broadcast| WSHHandler
+    
+    WSHHandler -->|WebSocket ws/stream| WSClient
+    WSClient -->|Triggers reactive updates| UI
+    
+    UI -->|PUT status change| Controller
+    Controller -->|Update status| CaseColl
+    Controller -->|Broadcast updates| WSHHandler
+```
+
+---
+
 ## 🚀 Next Steps / Future Enhancements
 - [ ] **OpenAPI Integration**: Set up Swagger/OpenAPI documentation in Spring Boot to automatically expose the REST API endpoints to developer portals or external AI agents.
 - [ ] **MCP Server Wrapper**: Build a Model Context Protocol (MCP) server (e.g., in Node.js or Python) that interfaces with the Spring Boot REST APIs, allowing external LLM agents to act directly on the FraudShield system.
