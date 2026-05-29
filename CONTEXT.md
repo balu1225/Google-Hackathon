@@ -36,6 +36,12 @@ This file maintains the active development context, current state, completed wor
   * Rewrote [App.tsx](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/App.tsx) to establish a live feed of streaming transactions, active alerts list, and an investigation drawer panel displaying transaction attributes vs cardholder baseline profile.
   * Designed dark-theme styling inside [index.css](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/index.css) utilizing glassmorphism overlays and red/orange glowing badges for high-risk alerts.
 
+### 4. Model Context Protocol (MCP) Server Wrapper
+* **Integration Wrapper**:
+  * Created [mcp_server.py](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/mcp_server.py) using `FastMCP` (Python SDK).
+  * Exposes tools: `get_open_cases()`, `get_user_baseline(account_id)`, `get_case_transactions(account_id)` (read directly from MongoDB), and `update_case_status(case_id, status)` (triggers REST mutation to sync the dashboard and db).
+  * Created [verify_mcp.py](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/verify_mcp.py) to check tool bindings.
+
 ---
 
 ## 📊 System Architecture & Data Flow
@@ -92,5 +98,4 @@ graph TD
 
 ## 🚀 Next Steps / Future Enhancements
 - [ ] **OpenAPI Integration**: Set up Swagger/OpenAPI documentation in Spring Boot to automatically expose the REST API endpoints to developer portals or external AI agents.
-- [ ] **MCP Server Wrapper**: Build a Model Context Protocol (MCP) server (e.g., in Node.js or Python) that interfaces with the Spring Boot REST APIs, allowing external LLM agents to act directly on the FraudShield system.
 - [ ] **Advanced Prompting**: Extend `GeminiService.java` to support historic context (e.g., passing the last 5 transactions in the prompt to analyze temporal transaction patterns, such as velocity limits).
