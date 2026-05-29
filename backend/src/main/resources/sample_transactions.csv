@@ -1,0 +1,9 @@
+transactionId,timestamp,senderAccount,receiverAccount,amount,transactionType,merchantCategory,location,deviceUsed,isFraud
+TXN001,2026-05-29T12:00:00,ACC101,ACC201,45.50,payment,groceries,New York,mobile,false
+TXN002,2026-05-29T12:05:00,ACC102,ACC202,110.00,payment,electronics,London,web,false
+TXN003,2026-05-29T12:10:00,ACC101,ACC999,950.00,withdrawal,financial,Tokyo,web,false
+TXN004,2026-05-29T12:15:00,ACC103,ACC203,62.20,payment,dining,San Francisco,mobile,false
+TXN005,2026-05-29T12:20:00,ACC103,ACC888,520.00,withdrawal,retail,Boston,web,false
+TXN006,2026-05-29T12:25:00,ACC101,ACC204,25.00,payment,groceries,New York,mobile,false
+TXN007,2026-05-29T12:30:00,ACC102,ACC777,3200.00,withdrawal,financial,London,mobile,false
+TXN008,2026-05-29T12:35:00,ACC103,ACC205,78.90,payment,groceries,San Francisco,web,false
