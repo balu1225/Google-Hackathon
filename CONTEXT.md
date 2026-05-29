@@ -30,6 +30,7 @@ This file maintains the active development context, current state, completed wor
   * Built [GeminiService.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/service/GeminiService.java) to request structured AI analysis from Gemini 2.5 Flash, with a local rules-based fallback simulator if no `GEMINI_API_KEY` is set.
   * Modified [IngestionService.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/service/IngestionService.java) to check baselines (location mismatch, device mismatch, amount anomaly), query Gemini on flags, save cases, and broadcast real-time transaction/alert socket events.
   * Implemented REST APIs in [FraudCaseController.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/controller/FraudCaseController.java) to retrieve cases, get user baselines, list transactions, and update case status (e.g. freeze account).
+  * **Advanced Stateful Analysis (Velocity)**: Updated [TransactionRepository.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/repository/TransactionRepository.java) and [GeminiService.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/service/GeminiService.java) to query the cardholder's top 5 recent transactions and incorporate them in the prompt context. This enables real-time detection of velocity and impossible travel anomalies (e.g., card swiped in Tokyo 10 minutes after New York).
 
 ### 3. Frontend Interactive Dashboard (React)
 * **Visual Interface**:
@@ -98,4 +99,4 @@ graph TD
 
 ## 🚀 Next Steps / Future Enhancements
 - [ ] **OpenAPI Integration**: Set up Swagger/OpenAPI documentation in Spring Boot to automatically expose the REST API endpoints to developer portals or external AI agents.
-- [ ] **Advanced Prompting**: Extend `GeminiService.java` to support historic context (e.g., passing the last 5 transactions in the prompt to analyze temporal transaction patterns, such as velocity limits).
+- [x] **Advanced Prompting**: Extend `GeminiService.java` to support historic context (e.g., passing the last 5 transactions in the prompt to analyze temporal transaction patterns, such as velocity limits).
