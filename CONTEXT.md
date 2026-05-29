@@ -34,8 +34,8 @@ This file maintains the active development context, current state, completed wor
 
 ### 3. Frontend Interactive Dashboard (React)
 * **Visual Interface**:
-  * Rewrote [App.tsx](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/App.tsx) to establish a live feed of streaming transactions, active alerts list, and an investigation drawer panel displaying transaction attributes vs cardholder baseline profile.
-  * Designed dark-theme styling inside [index.css](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/index.css) utilizing glassmorphism overlays and red/orange glowing badges for high-risk alerts.
+  * Rewrote [App.tsx](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/App.tsx) to establish a comprehensive data table of streaming transactions, active alerts queue, and an investigation board. Evaluates baseline flag audits (Location, Device, Amount mismatches) dynamically on the client-side.
+  * Designed clean, corporate blue-and-white styling inside [index.css](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/frontend/src/index.css) with clear warning/alert pills to track the number of flags per transaction.
 
 ### 4. Model Context Protocol (MCP) Server Wrapper
 * **Integration Wrapper**:
