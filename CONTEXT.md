@@ -43,6 +43,12 @@ This file maintains the active development context, current state, completed wor
   * Exposes tools: `get_open_cases()`, `get_user_baseline(account_id)`, `get_case_transactions(account_id)` (read directly from MongoDB), and `update_case_status(case_id, status)` (triggers REST mutation to sync the dashboard and db).
   * Created [verify_mcp.py](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/verify_mcp.py) to check tool bindings.
 
+### 5. Swagger / OpenAPI Integration
+* **Self-Documenting API**:
+  * Added `springdoc-openapi` to the Spring Boot [pom.xml](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/pom.xml).
+  * Implemented [OpenApiConfig.java](file:///Users/hemanthbalakrishnanuthalapati/Code%20/google%20hackaton/Google-Hackathon/backend/src/main/java/com/fraudshield/backend/config/OpenApiConfig.java) to set API metadata.
+  * Automatically publishes OpenAPI JSON schemas at `/v3/api-docs` and hosts the interactive Swagger UI at `/swagger-ui/index.html` to allow developers and external LLM agents to auto-discover all endpoints.
+
 ---
 
 ## 📊 System Architecture & Data Flow
@@ -98,5 +104,5 @@ graph TD
 ---
 
 ## 🚀 Next Steps / Future Enhancements
-- [ ] **OpenAPI Integration**: Set up Swagger/OpenAPI documentation in Spring Boot to automatically expose the REST API endpoints to developer portals or external AI agents.
+- [x] **OpenAPI Integration**: Set up Swagger/OpenAPI documentation in Spring Boot to automatically expose the REST API endpoints to developer portals or external AI agents.
 - [x] **Advanced Prompting**: Extend `GeminiService.java` to support historic context (e.g., passing the last 5 transactions in the prompt to analyze temporal transaction patterns, such as velocity limits).
