@@ -69,6 +69,11 @@ public class FraudCaseController {
         return ResponseEntity.notFound().build();
     }
 
+    @GetMapping("/users")
+    public ResponseEntity<List<User>> getAllUsers() {
+        return ResponseEntity.ok(userRepository.findAll());
+    }
+
     @GetMapping("/users/{accountId}")
     public ResponseEntity<User> getUserByAccountId(@PathVariable String accountId) {
         Optional<User> userOpt = userRepository.findByAccountId(accountId);
