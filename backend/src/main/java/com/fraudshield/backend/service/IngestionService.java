@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -83,7 +84,8 @@ public class IngestionService {
                                 t.setIsFraud(true);
 
                                 // Trigger Gemini analysis
-                                GeminiService.GeminiAnalysisResult analysis = geminiService.analyzeTransaction(t, user);
+                                List<Transaction> history = transactionRepository.findTop5BySenderAccountOrderByTimestampDesc(t.getSenderAccount());
+                                GeminiService.GeminiAnalysisResult analysis = geminiService.analyzeTransaction(t, user, history);
 
                                 FraudCase fraudCase = new FraudCase();
                                 fraudCase.setTransactionId(t.getTransactionId());

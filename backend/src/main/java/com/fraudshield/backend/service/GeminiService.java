@@ -13,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -50,22 +51,40 @@ public class GeminiService {
         public void setRecommendedAction(String recommendedAction) { this.recommendedAction = recommendedAction; }
     }
 
-    public GeminiAnalysisResult analyzeTransaction(Transaction txn, User user) {
+    public GeminiAnalysisResult analyzeTransaction(Transaction txn, User user, List<Transaction> recentHistory) {
         // Fallback check if API key is empty/not configured
         if (apiKey == null || apiKey.trim().isEmpty()) {
             System.out.println("Warning: GEMINI_API_KEY is not configured. Running fallback simulation analysis.");
-            return runSimulationAnalysis(txn, user);
+            return runSimulationAnalysis(txn, user, recentHistory);
         }
 
         try {
+            StringBuilder historyBuilder = new StringBuilder();
+            if (recentHistory == null || recentHistory.isEmpty()) {
+                historyBuilder.append("  - No recent transaction history found.\n");
+            } else {
+                for (Transaction prevTxn : recentHistory) {
+                    historyBuilder.append(String.format(
+                        "  - Txn ID: %s | Time: %s | Amount: $%.2f | Location: %s | Device: %s | Fraud Flagged: %s\n",
+                        prevTxn.getTransactionId(),
+                        prevTxn.getTimestamp().toString(),
+                        prevTxn.getAmount(),
+                        prevTxn.getLocation(),
+                        prevTxn.getDeviceUsed(),
+                        prevTxn.getIsFraud()
+                    ));
+                }
+            }
+
             String prompt = String.format(
-                "You are an expert fraud detection AI. Analyze this financial transaction against the user's historical baseline profile and output if it is fraud, risk details, and recommended action.\n\n" +
+                "You are an expert fraud detection AI. Analyze this financial transaction against the user's historical baseline profile AND their recent transaction history, then output if it is fraud, risk details, and recommended action.\n\n" +
                 "User Name: %s\n" +
                 "Account ID: %s\n" +
-                "User Baseline:\n" +
+                "User Baseline Profile:\n" +
                 "  - Frequent Locations: %s\n" +
                 "  - Frequent Devices: %s\n" +
                 "  - Average Transaction Value: $%.2f\n\n" +
+                "Recent Transactions History (Most Recent First):\n%s\n" +
                 "Transaction under investigation:\n" +
                 "  - Transaction ID: %s\n" +
                 "  - Timestamp: %s\n" +
@@ -74,11 +93,13 @@ public class GeminiService {
                 "  - Location: %s\n" +
                 "  - Device Used: %s\n" +
                 "  - Merchant Category: %s\n" +
-                "  - Receiver Account: %s\n",
+                "  - Receiver Account: %s\n\n" +
+                "CRITICAL: Evaluate geographic velocity (e.g. is it physically possible to travel between the locations of the recent transactions and this new transaction in the elapsed time?).",
                 user.getName(), user.getAccountId(),
                 String.join(", ", user.getFrequentLocations()),
                 String.join(", ", user.getFrequentDevices()),
                 user.getAverageTransactionValue(),
+                historyBuilder.toString(),
                 txn.getTransactionId(),
                 txn.getTimestamp().toString(),
                 txn.getAmount(),
@@ -140,16 +161,16 @@ public class GeminiService {
                 return objectMapper.readValue(jsonText, GeminiAnalysisResult.class);
             } else {
                 System.err.println("Gemini API call failed with status: " + response.statusCode() + " response: " + response.body());
-                return runSimulationAnalysis(txn, user);
+                return runSimulationAnalysis(txn, user, recentHistory);
             }
 
         } catch (Exception e) {
             System.err.println("Exception calling Gemini API: " + e.getMessage());
-            return runSimulationAnalysis(txn, user);
+            return runSimulationAnalysis(txn, user, recentHistory);
         }
     }
 
-    private GeminiAnalysisResult runSimulationAnalysis(Transaction txn, User user) {
+    private GeminiAnalysisResult runSimulationAnalysis(Transaction txn, User user, List<Transaction> recentHistory) {
         GeminiAnalysisResult result = new GeminiAnalysisResult();
         boolean locationMismatch = !user.getFrequentLocations().contains(txn.getLocation());
         boolean deviceMismatch = !user.getFrequentDevices().contains(txn.getDeviceUsed());
@@ -159,6 +180,26 @@ public class GeminiService {
         var signals = new java.util.ArrayList<String>();
         var reasoning = new StringBuilder("Simulation Anomaly Analyzer flagged this transaction. ");
 
+        // Velocity checking
+        boolean velocityAnomaly = false;
+        long durationMinutes = 0;
+        String prevLoc = "";
+        if (recentHistory != null && !recentHistory.isEmpty()) {
+            Transaction prev = recentHistory.get(0);
+            durationMinutes = Math.abs(java.time.Duration.between(prev.getTimestamp(), txn.getTimestamp()).toMinutes());
+            prevLoc = prev.getLocation();
+            boolean locDiff = !prev.getLocation().equalsIgnoreCase(txn.getLocation());
+            // If location changed and time difference is less than 2 hours (120 minutes)
+            if (locDiff && durationMinutes < 120) {
+                velocityAnomaly = true;
+            }
+        }
+
+        if (velocityAnomaly) {
+            score += 0.45;
+            signals.add(String.format("Velocity attack detected (Impossible travel: %s to %s in %d mins)", prevLoc, txn.getLocation(), durationMinutes));
+            reasoning.append(String.format("Geographic velocity check failed. A transaction was completed in %s, and just %d minutes later, a transaction occurred in %s. Travel between these locations is physically impossible in the elapsed time. ", prevLoc, durationMinutes, txn.getLocation()));
+        }
         if (locationMismatch) {
             score += 0.35;
             signals.add("Location mismatch (" + txn.getLocation() + " is not in frequent locations)");
