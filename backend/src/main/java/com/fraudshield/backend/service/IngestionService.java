@@ -152,6 +152,15 @@ public class IngestionService {
     }
 
     private void processTransaction(Transaction t) {
+        // Check if transaction was already processed/ingested to prevent duplicates
+        Optional<Transaction> existingTxOpt = transactionRepository.findByTransactionId(t.getTransactionId());
+        if (existingTxOpt.isPresent()) {
+            // Set MongoDB ID to overwrite it and return early to avoid duplicate processing/Gemini calls
+            t.setId(existingTxOpt.get().getId());
+            transactionRepository.save(t);
+            return;
+        }
+
         // Check user baseline behaviors
         Optional<User> userOpt = userRepository.findByAccountId(t.getSenderAccount());
         if (userOpt.isPresent()) {

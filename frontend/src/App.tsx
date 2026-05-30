@@ -37,6 +37,11 @@ interface User {
 const API_BASE = "http://localhost:8080/api";
 const WS_URL = "ws://localhost:8080/ws/stream";
 
+const normalizeRisk = (score: number) => {
+  if (score === undefined || score === null) return 0;
+  return score > 1.0 ? score / 100 : score;
+};
+
 function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [cases, setCases] = useState<FraudCase[]>([]);
@@ -382,8 +387,8 @@ function App() {
                     <span style={{ color: 'var(--text-secondary)' }}>Account: {c.accountId}</span>
                     <span style={{ 
                       fontWeight: 700, 
-                      color: c.riskScore > 0.7 ? 'var(--color-danger)' : c.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-success)'
-                    }}>Risk: {(c.riskScore * 100).toFixed(0)}%</span>
+                      color: normalizeRisk(c.riskScore) > 0.7 ? 'var(--color-danger)' : normalizeRisk(c.riskScore) > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)'
+                    }}>Risk: {(normalizeRisk(c.riskScore) * 100).toFixed(0)}%</span>
                   </div>
                 </div>
               ))
@@ -466,19 +471,19 @@ function App() {
                     <div className="score-row">
                       <span className="score-lbl">Risk Score Assessment</span>
                       <span className="score-num" style={{
-                        color: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)'
-                      }}>{(selectedCase.riskScore * 100).toFixed(0)}%</span>
+                        color: normalizeRisk(selectedCase.riskScore) > 0.7 ? 'var(--color-danger)' : normalizeRisk(selectedCase.riskScore) > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)'
+                      }}>{(normalizeRisk(selectedCase.riskScore) * 100).toFixed(0)}%</span>
                     </div>
 
                     <div className="score-bar-bg">
                       <div className="score-bar-fg" style={{
-                        width: `${selectedCase.riskScore * 100}%`,
-                        backgroundColor: selectedCase.riskScore > 0.7 ? 'var(--color-danger)' : selectedCase.riskScore > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)',
+                        width: `${normalizeRisk(selectedCase.riskScore) * 100}%`,
+                        backgroundColor: normalizeRisk(selectedCase.riskScore) > 0.7 ? 'var(--color-danger)' : normalizeRisk(selectedCase.riskScore) > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)',
                       }} />
                     </div>
 
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      <strong>AI Status:</strong> {selectedCase.riskScore > 0.7 ? 'CRITICAL THREAT' : selectedCase.riskScore > 0.4 ? 'ABNORMAL PATTERN' : 'LOW RISK'}
+                      <strong>AI Status:</strong> {normalizeRisk(selectedCase.riskScore) > 0.7 ? 'CRITICAL THREAT' : normalizeRisk(selectedCase.riskScore) > 0.4 ? 'ABNORMAL PATTERN' : 'LOW RISK'}
                     </div>
 
                     <div className="ai-reasoning">

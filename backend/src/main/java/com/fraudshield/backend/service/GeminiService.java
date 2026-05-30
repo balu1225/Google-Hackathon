@@ -155,7 +155,10 @@ public class GeminiService {
             responseSchema.put("type", "OBJECT");
             
             Map<String, Object> properties = new HashMap<>();
-            properties.put("riskScore", Map.of("type", "NUMBER"));
+            properties.put("riskScore", Map.of(
+                "type", "NUMBER",
+                "description", "The evaluated fraud risk score, as a decimal between 0.0 (safe) and 1.0 (highest risk)"
+            ));
             properties.put("confidenceLevel", Map.of("type", "STRING"));
             properties.put("primarySignals", Map.of("type", "ARRAY", "items", Map.of("type", "STRING")));
             properties.put("detailedReasoning", Map.of("type", "STRING"));
