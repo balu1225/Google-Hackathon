@@ -4,6 +4,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.fraudshield.backend.model.Transaction;
 import com.fraudshield.backend.model.User;
+import com.google.auth.oauth2.GoogleCredentials;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,8 +21,22 @@ import java.util.Map;
 @Service
 public class GeminiService {
 
-    @Value("${gemini.api.key:}")
-    private String apiKey;
+    @Value("${gcp.project.id:}")
+    private String projectId;
+
+    @Value("${gcp.region:us-central1}")
+    private String region;
+
+    private String getVertexAccessToken() throws Exception {
+        GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+        if (credentials.createScopedRequired()) {
+            credentials = credentials.createScoped(
+                Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
+            );
+        }
+        credentials.refreshIfExpired();
+        return credentials.getAccessToken().getTokenValue();
+    }
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -52,13 +68,22 @@ public class GeminiService {
     }
 
     public GeminiAnalysisResult analyzeTransaction(Transaction txn, User user, List<Transaction> recentHistory) {
-        // Fallback check if API key is empty/not configured
-        if (apiKey == null || apiKey.trim().isEmpty()) {
-            System.out.println("Warning: GEMINI_API_KEY is not configured. Running fallback simulation analysis.");
+        // Fallback check if Project ID is empty/not configured
+        if (projectId == null || projectId.trim().isEmpty()) {
+            System.out.println("Warning: gcp.project.id is not configured. Running fallback simulation analysis.");
             return runSimulationAnalysis(txn, user, recentHistory);
         }
 
         try {
+            // Retrieve OAuth access token from GCP credentials
+            String accessToken;
+            try {
+                accessToken = getVertexAccessToken();
+            } catch (Exception authEx) {
+                System.out.println("Warning: Failed to fetch Vertex AI access token. Check your gcloud authentication. Running fallback simulation. Error: " + authEx.getMessage());
+                return runSimulationAnalysis(txn, user, recentHistory);
+            }
+
             StringBuilder historyBuilder = new StringBuilder();
             if (recentHistory == null || recentHistory.isEmpty()) {
                 historyBuilder.append("  - No recent transaction history found.\n");
@@ -117,6 +142,7 @@ public class GeminiService {
             Map<String, Object> part = new HashMap<>();
             part.put("text", prompt);
             Map<String, Object> content = new HashMap<>();
+            content.put("role", "user");
             content.put("parts", new Object[]{part});
             requestBody.put("contents", new Object[]{content});
 
@@ -143,11 +169,16 @@ public class GeminiService {
 
             String requestBodyJson = objectMapper.writeValueAsString(requestBody);
 
-            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+            // Construct Vertex AI endpoint URL
+            String url = String.format(
+                "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/gemini-2.5-flash:generateContent",
+                region, projectId, region
+            );
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + accessToken)
                     .POST(HttpRequest.BodyPublishers.ofString(requestBodyJson))
                     .timeout(Duration.ofSeconds(15))
                     .build();
@@ -160,12 +191,12 @@ public class GeminiService {
                 String jsonText = candidateText.asText();
                 return objectMapper.readValue(jsonText, GeminiAnalysisResult.class);
             } else {
-                System.err.println("Gemini API call failed with status: " + response.statusCode() + " response: " + response.body());
+                System.err.println("Vertex AI Gemini call failed with status: " + response.statusCode() + " response: " + response.body());
                 return runSimulationAnalysis(txn, user, recentHistory);
             }
 
         } catch (Exception e) {
-            System.err.println("Exception calling Gemini API: " + e.getMessage());
+            System.err.println("Exception calling Vertex AI: " + e.getMessage());
             return runSimulationAnalysis(txn, user, recentHistory);
         }
     }
