@@ -83,6 +83,38 @@ async def update_case_status(case_id: str, status: str) -> str:
         except Exception as e:
             return f"Error connecting to backend: {str(e)}"
 
+@mcp.tool()
+async def get_receiver_profile(receiver_account_id: str) -> str:
+    """Retrieve transaction history for a receiver account to check for money mule patterns."""
+    try:
+        txns = list(db["transactions"].find({"receiverAccount": receiver_account_id}).sort("timestamp", -1).limit(10))
+        if not txns:
+            return f"No incoming transaction history found for receiver account {receiver_account_id}."
+        
+        result = f"Recent Incoming Transactions for Receiver Account {receiver_account_id}:\n"
+        for t in txns:
+            result += f"- {t['transactionId']} | {t['timestamp']} | ${t['amount']:.2f} | Sender: {t['senderAccount']} | Type: {t['transactionType']} | Loc: {t['location']}\n"
+        return result
+    except Exception as e:
+        return f"Error reading from MongoDB: {str(e)}"
+
+@mcp.tool()
+async def submit_investigation_report(case_id: str, report_json: str) -> str:
+    """Submit an autonomous agent investigation report for a specific fraud case."""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.put(
+                f"{API_BASE}/cases/{case_id}/report",
+                content=report_json,
+                headers={"Content-Type": "application/json"}
+            )
+            if response.status_code == 200:
+                return f"Success: Investigation report attached to case {case_id}."
+            else:
+                return f"Error submitting report: {response.text}"
+        except Exception as e:
+            return f"Error connecting to backend: {str(e)}"
+
 if __name__ == "__main__":
     import sys
     # FastMCP uses standard stdio by default, running the server

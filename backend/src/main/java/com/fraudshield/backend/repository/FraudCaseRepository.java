@@ -11,4 +11,5 @@ import java.util.Optional;
 public interface FraudCaseRepository extends MongoRepository<FraudCase, String> {
     Optional<FraudCase> findByTransactionId(String transactionId);
     List<FraudCase> findByStatus(String status);
+    List<FraudCase> findTop500ByOrderByDetectedAtDesc();
 }

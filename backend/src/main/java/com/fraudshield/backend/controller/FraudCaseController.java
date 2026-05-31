@@ -37,7 +37,7 @@ public class FraudCaseController {
 
     @GetMapping("/cases")
     public ResponseEntity<List<FraudCase>> getAllCases() {
-        return ResponseEntity.ok(fraudCaseRepository.findAll());
+        return ResponseEntity.ok(fraudCaseRepository.findTop500ByOrderByDetectedAtDesc());
     }
 
     @GetMapping("/cases/{caseId}")
@@ -47,12 +47,47 @@ public class FraudCaseController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    @Autowired
+    private com.fraudshield.backend.service.IngestionService ingestionService;
+
     @PutMapping("/cases/{caseId}/status")
     public ResponseEntity<FraudCase> updateCaseStatus(@PathVariable String caseId, @RequestParam String status) {
         Optional<FraudCase> caseOpt = fraudCaseRepository.findById(caseId);
         if (caseOpt.isPresent()) {
             FraudCase fc = caseOpt.get();
             fc.setStatus(status);
+            fraudCaseRepository.save(fc);
+
+            if ("CLOSED".equals(status)) {
+                Optional<Transaction> txOpt = transactionRepository.findByTransactionId(fc.getTransactionId());
+                if (txOpt.isPresent()) {
+                    Transaction tx = txOpt.get();
+                    tx.setIsFraud(false);
+                    transactionRepository.save(tx);
+                    ingestionService.triggerAsyncProfileUpdate(tx.getSenderAccount());
+                }
+            }
+
+            // Broadcast case update
+            try {
+                String eventJson = String.format("{\"type\":\"CASE_UPDATE\",\"data\":%s}",
+                        objectMapper.writeValueAsString(fc));
+                webSocketHandler.broadcast(eventJson);
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+
+            return ResponseEntity.ok(fc);
+        }
+        return ResponseEntity.notFound().build();
+    }
+
+    @PutMapping("/cases/{caseId}/report")
+    public ResponseEntity<FraudCase> updateCaseReport(@PathVariable String caseId, @RequestBody String report) {
+        Optional<FraudCase> caseOpt = fraudCaseRepository.findById(caseId);
+        if (caseOpt.isPresent()) {
+            FraudCase fc = caseOpt.get();
+            fc.setInvestigationReport(report);
             fraudCaseRepository.save(fc);
 
             // Broadcast case update
@@ -81,8 +116,20 @@ public class FraudCaseController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/transactions/count")
+    public ResponseEntity<Long> getTransactionCount() {
+        return ResponseEntity.ok(transactionRepository.count());
+    }
+
     @GetMapping("/transactions")
     public ResponseEntity<List<Transaction>> getAllTransactions() {
-        return ResponseEntity.ok(transactionRepository.findAll());
+        return ResponseEntity.ok(transactionRepository.findTop500ByOrderByTimestampDesc());
+    }
+
+    @DeleteMapping("/debug/clear")
+    public ResponseEntity<String> clearData() {
+        transactionRepository.deleteAll();
+        fraudCaseRepository.deleteAll();
+        return ResponseEntity.ok("Cleared all transactions and cases successfully.");
     }
 }

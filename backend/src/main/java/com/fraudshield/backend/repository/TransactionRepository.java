@@ -10,5 +10,10 @@ import java.util.Optional;
 @Repository
 public interface TransactionRepository extends MongoRepository<Transaction, String> {
     List<Transaction> findTop5BySenderAccountOrderByTimestampDesc(String senderAccount);
+    List<Transaction> findTop10BySenderAccountOrderByTimestampDesc(String senderAccount);
+    List<Transaction> findTop5BySenderAccountAndIsFraudNotOrderByTimestampDesc(String senderAccount, Boolean isFraud);
+    List<Transaction> findTop10BySenderAccountAndIsFraudNotOrderByTimestampDesc(String senderAccount, Boolean isFraud);
     Optional<Transaction> findByTransactionId(String transactionId);
+    List<Transaction> findTop10ByReceiverAccountOrderByTimestampDesc(String receiverAccount);
+    List<Transaction> findTop500ByOrderByTimestampDesc();
 }

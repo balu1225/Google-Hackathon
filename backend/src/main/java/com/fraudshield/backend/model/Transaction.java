@@ -22,6 +22,16 @@ public class Transaction {
     private String deviceUsed; // mobile/web/atm/pos
     private Boolean isFraud;
 
+    // Advanced Kaggle Dataset fields
+    private String fraudType;
+    private Double timeSinceLastTransaction;
+    private Double spendingDeviationScore;
+    private Double velocityScore;
+    private Double geoAnomalyScore;
+    private String paymentChannel;
+    private String ipAddress;
+    private String deviceHash;
+
     // Getters and Setters
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -55,4 +65,28 @@ public class Transaction {
 
     public Boolean getIsFraud() { return isFraud; }
     public void setIsFraud(Boolean isFraud) { this.isFraud = isFraud; }
+
+    public String getFraudType() { return fraudType; }
+    public void setFraudType(String fraudType) { this.fraudType = fraudType; }
+
+    public Double getTimeSinceLastTransaction() { return timeSinceLastTransaction; }
+    public void setTimeSinceLastTransaction(Double timeSinceLastTransaction) { this.timeSinceLastTransaction = timeSinceLastTransaction; }
+
+    public Double getSpendingDeviationScore() { return spendingDeviationScore; }
+    public void setSpendingDeviationScore(Double spendingDeviationScore) { this.spendingDeviationScore = spendingDeviationScore; }
+
+    public Double getVelocityScore() { return velocityScore; }
+    public void setVelocityScore(Double velocityScore) { this.velocityScore = velocityScore; }
+
+    public Double getGeoAnomalyScore() { return geoAnomalyScore; }
+    public void setGeoAnomalyScore(Double geoAnomalyScore) { this.geoAnomalyScore = geoAnomalyScore; }
+
+    public String getPaymentChannel() { return paymentChannel; }
+    public void setPaymentChannel(String paymentChannel) { this.paymentChannel = paymentChannel; }
+
+    public String getIpAddress() { return ipAddress; }
+    public void setIpAddress(String ipAddress) { this.ipAddress = ipAddress; }
+
+    public String getDeviceHash() { return deviceHash; }
+    public void setDeviceHash(String deviceHash) { this.deviceHash = deviceHash; }
 }

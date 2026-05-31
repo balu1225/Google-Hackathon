@@ -118,7 +118,7 @@ graph TD
 ---
 
 ### Feature 1 — Living Behavioral Profile (Auto-Updating Baselines)
-**Status**: `[ ] Not started`
+**Status**: `[x] Completed`
 
 **The Problem**: User baselines are seeded once at startup and never change. A user who moves to a new city, gets a new phone, or changes their spending habits will keep getting false-positive fraud alerts forever. Banks lose customer trust over this.
 
@@ -150,7 +150,7 @@ graph TD
 ---
 
 ### Feature 2 — Receiver Network Analysis (Money Mule Detection)
-**Status**: `[ ] Not started`
+**Status**: `[x] Incorporated into Feature 3`
 
 **The Problem**: Current system only profiles the **sender**. Sophisticated fraud uses money mule chains — victim sends to mule 1, mule 1 to mule 2, mule 2 offshore. Each individual hop looks normal. Only the receiver's network pattern reveals the crime.
 
@@ -181,7 +181,7 @@ graph TD
 ---
 
 ### Feature 3 — Autonomous Investigation Agent (Agentic Case Handler)
-**Status**: `[ ] Not started`
+**Status**: `[x] Completed`
 
 **The Problem**: Human analysts currently spend 20–45 minutes per case manually pulling history, checking related accounts, writing up reports, and drafting customer communication. Banks employ thousands of analysts just for this. It is the single biggest cost in fraud operations.
 
@@ -219,7 +219,7 @@ Step 6: update_case_status(caseId, recommendedAction)
 ---
 
 ### Feature 4 — Regulatory Explanation Engine (Compliance-Ready Audit Trail)
-**Status**: `[ ] Not started`
+**Status**: `[x] Completed`
 
 **The Problem**: GDPR Article 22, RBI guidelines, and US FFIEC regulations require banks to provide a **human-readable explanation** to any customer whose transaction was automatically declined or account frozen. Banks are being fined billions for "the algorithm said so." Their black-box ML models cannot explain themselves.
 
@@ -294,8 +294,8 @@ if (user.isElevatedSuspicion()) {
 
 | # | Feature | Status | Impact |
 |---|---------|--------|--------|
-| 1 | Living Behavioral Profile | `[ ] Not started` | Kills false positives |
-| 2 | Receiver Network / Money Mule Detection | `[ ] Not started` | Catches organized fraud rings |
-| 3 | Autonomous Investigation Agent | `[ ] Not started` | Removes analyst bottleneck |
-| 4 | Regulatory Explanation Engine | `[ ] Not started` | Compliance product value |
+| 1 | Living Behavioral Profile | `[x] Completed` | Kills false positives |
+| 2 | Receiver Network / Money Mule Detection | `[x] Incorporated into Feature 3` | Catches organized fraud rings |
+| 3 | Autonomous Investigation Agent | `[x] Completed` | Removes analyst bottleneck |
+| 4 | Regulatory Explanation Engine | `[x] Completed` | Compliance product value |
 | 5 | Pre-Transaction Drift Detector | `[ ] Not started` | Stops account takeover |

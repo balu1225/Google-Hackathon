@@ -18,6 +18,10 @@ public class FraudCase {
     private String aiReasoning; // The explanation from Gemini
     private Double riskScore;
     private String status; // e.g., "OPEN", "CLOSED", "ACCOUNT_FROZEN"
+    
+    private String customerExplanation;
+    private String regulatoryAuditRecord;
+    private String investigationReport;
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -39,4 +43,13 @@ public class FraudCase {
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+
+    public String getCustomerExplanation() { return customerExplanation; }
+    public void setCustomerExplanation(String customerExplanation) { this.customerExplanation = customerExplanation; }
+
+    public String getRegulatoryAuditRecord() { return regulatoryAuditRecord; }
+    public void setRegulatoryAuditRecord(String regulatoryAuditRecord) { this.regulatoryAuditRecord = regulatoryAuditRecord; }
+
+    public String getInvestigationReport() { return investigationReport; }
+    public void setInvestigationReport(String investigationReport) { this.investigationReport = investigationReport; }
 }
