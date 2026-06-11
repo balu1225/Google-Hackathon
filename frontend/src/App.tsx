@@ -122,13 +122,13 @@ const STATUS_LABELS: Record<string, string> = {
 // ── Live Investigation Timeline Component ──
 
 const TOOL_META: Record<string, { label: string; icon: string; color: string }> = {
-  get_user_baseline:           { label: 'Reviewing account behavior profile',    icon: '👤', color: '#60a5fa' },
-  get_case_transactions:       { label: 'Analyzing transaction history',          icon: '📊', color: '#a78bfa' },
-  get_receiver_profile:        { label: 'Checking receiver for mule patterns',    icon: '🎯', color: '#f97316' },
-  get_open_cases:              { label: 'Scanning for related fraud cases',       icon: '🔍', color: '#fbbf24' },
-  submit_investigation_report: { label: 'Submitting final investigation report',  icon: '📋', color: '#34d399' },
-  update_case_status:          { label: 'Applying case decision',                 icon: '⚡', color: '#f43f5e' },
-  get_fraud_network_stats:     { label: 'Analyzing fraud network statistics',     icon: '🕸️', color: '#22d3ee' },
+  get_user_baseline:           { label: 'Reviewing account behavior profile',   icon: '👤', color: '#60a5fa' },
+  get_case_transactions:       { label: 'Analyzing transaction history',         icon: '📊', color: '#a78bfa' },
+  get_receiver_profile:        { label: 'Checking receiver for mule patterns',   icon: '🎯', color: '#f97316' },
+  get_open_cases:              { label: 'Scanning for related fraud cases',      icon: '🔍', color: '#fbbf24' },
+  submit_investigation_report: { label: 'Submitting final investigation report', icon: '📋', color: '#34d399' },
+  update_case_status:          { label: 'Applying case decision',                icon: '⚡', color: '#f43f5e' },
+  get_fraud_network_stats:     { label: 'Analyzing fraud network statistics',    icon: '🕸️', color: '#22d3ee' },
 };
 
 function LiveInvestigationTimeline({
@@ -144,7 +144,6 @@ function LiveInvestigationTimeline({
   setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
   liveEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  // Pair TOOL_CALL with matching TOOL_RESULT
   const pairs: { call: TraceStep; result?: TraceStep; idx: number }[] = [];
   const reasoningSteps: TraceStep[] = [];
   let completeStep: TraceStep | undefined;
@@ -170,97 +169,128 @@ function LiveInvestigationTimeline({
     });
   };
 
-  const activePairIdx = isLive
-    ? pairs.findLastIndex(p => !p.result)
-    : -1;
+  const activePairIdx = isLive ? pairs.findLastIndex(p => !p.result) : -1;
+  const fmtDuration = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  const hasContent = pairs.length > 0 || reasoningSteps.length > 0 || !!completeStep || (isLive && pairs.length === 0);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-      {pairs.map(({ call, result, idx }) => {
-        const meta = TOOL_META[call.tool || ''] || { label: call.tool || 'Tool call', icon: '🔧', color: '#94a3b8' };
-        const isActive = isLive && idx === activePairIdx;
-        const isDone = !!result;
-        const key = `tool-${idx}`;
-        const isExpanded = expandedSteps.has(key);
-        const shortResult = result?.result
-          ? result.result.split('\n').filter(l => l.trim()).slice(0, 3).join('\n')
-          : '';
-        const durationMs = result?.durationMs;
+    <div className="ai-chat-window">
+      {/* Chat header */}
+      <div className="ai-chat-header">
+        <div className="ai-avatar">🤖</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>FraudShield AI Agent</div>
+          {isLive ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <div className="live-dot" />
+              <span style={{ fontSize: '0.6rem', color: '#60a5fa' }}>Thinking<span className="thinking-ellipsis" /></span>
+            </div>
+          ) : hasContent ? (
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+              Investigation complete · {pairs.length} step{pairs.length !== 1 ? 's' : ''}
+            </span>
+          ) : (
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Ready to investigate</span>
+          )}
+        </div>
+        <span className="model-badge">Gemini 2.5</span>
+      </div>
 
-        return (
-          <div key={key} className={`live-step tool-call-card ${isDone ? 'done' : isActive ? 'active' : ''}`}>
-            <div className="tool-card-header" onClick={() => isDone && toggleStep(key)}>
-              {/* Status icon */}
-              {isActive ? (
+      {/* Message list */}
+      <div className="ai-chat-messages">
+
+        {/* Starting state */}
+        {isLive && pairs.length === 0 && (
+          <div className="ai-message live-step">
+            <div className="ai-message-bubble active">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <div className="spinner" />
-              ) : isDone ? (
-                <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>✓</span>
-              ) : (
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>○</span>
-              )}
+                <span style={{ fontSize: '0.75rem', color: '#60a5fa', fontWeight: 600 }}>Gathering evidence</span>
+                <span className="thinking-badge">starting…</span>
+              </div>
+              <div className="thinking-progress" />
+            </div>
+          </div>
+        )}
 
-              {/* Tool icon */}
-              <span style={{ fontSize: '1rem' }}>{meta.icon}</span>
+        {/* Tool call pairs */}
+        {pairs.map(({ call, result, idx }) => {
+          const meta = TOOL_META[call.tool || ''] || { label: call.tool || 'Tool call', icon: '🔧', color: '#94a3b8' };
+          const isActive = isLive && idx === activePairIdx;
+          const isDone = !!result;
+          const key = `tool-${idx}`;
+          const isExpanded = expandedSteps.has(key);
+          const shortResult = result?.result
+            ? result.result.split('\n').filter(l => l.trim()).slice(0, 5).join('\n')
+            : '';
+          const durationMs = result?.durationMs;
 
-              {/* Label */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '0.76rem', fontWeight: 600, color: isActive ? meta.color : isDone ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                  {meta.label}
+          return (
+            <div key={key} className="ai-message live-step">
+              <div
+                className={`ai-message-bubble ${isActive ? 'active' : isDone ? 'done' : 'pending'}`}
+                onClick={() => isDone && toggleStep(key)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {isActive ? (
+                    <div className="spinner" />
+                  ) : isDone ? (
+                    <span style={{ fontSize: '0.75rem', color: '#22c55e', lineHeight: 1 }}>✓</span>
+                  ) : (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1 }}>○</span>
+                  )}
+                  <span style={{ fontSize: '1rem', lineHeight: 1 }}>{meta.icon}</span>
+                  <span style={{
+                    fontSize: '0.75rem', fontWeight: 600, flex: 1, minWidth: 0,
+                    color: isActive ? meta.color : isDone ? 'var(--text-primary)' : 'var(--text-muted)',
+                  }}>{meta.label}</span>
+                  {isActive && <span className="thinking-badge">thinking…</span>}
+                  {isDone && durationMs !== undefined && <span className="duration-badge">{fmtDuration(durationMs)}</span>}
+                  {isDone && (
+                    <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)', marginLeft: '0.1rem' }}>
+                      {isExpanded ? '▲' : '▼'}
+                    </span>
+                  )}
                 </div>
-                {isActive && (
-                  <div style={{ fontSize: '0.62rem', color: meta.color, marginTop: '0.1rem' }}>Fetching data…</div>
+                {isActive && <div className="thinking-progress" />}
+                {isDone && isExpanded && shortResult && (
+                  <div className="ai-result-block">{shortResult}</div>
                 )}
               </div>
-
-              {/* Duration + expand toggle */}
-              {isDone && durationMs !== undefined && (
-                <span className="duration-badge">{durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}</span>
-              )}
-              {isDone && (
-                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginLeft: '0.25rem' }}>{isExpanded ? '▲' : '▼'}</span>
-              )}
             </div>
+          );
+        })}
 
-            {isDone && isExpanded && shortResult && (
-              <div className="tool-card-detail">{shortResult}</div>
-            )}
+        {/* Reasoning */}
+        {reasoningSteps.map((r, i) => (
+          <div key={`reasoning-${i}`} className="ai-message live-step">
+            <div className="ai-message-bubble reasoning">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.45rem' }}>
+                <span style={{ fontSize: '0.9rem' }}>🧠</span>
+                <span style={{ fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#c084fc' }}>AI Conclusion</span>
+              </div>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-primary)', lineHeight: 1.6, margin: 0 }}>
+                {(r.content || '').length > 420 ? (r.content || '').substring(0, 420) + '…' : r.content}
+              </p>
+            </div>
           </div>
-        );
-      })}
+        ))}
 
-      {/* Reasoning */}
-      {reasoningSteps.map((r, i) => (
-        <div key={`reasoning-${i}`} className="reasoning-card live-step">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
-            <span style={{ fontSize: '0.85rem' }}>🧠</span>
-            <span style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#c084fc' }}>AI Conclusion</span>
+        {/* Complete */}
+        {completeStep && (
+          <div className="ai-message live-step">
+            <div className="ai-message-bubble complete">
+              <span style={{ fontSize: '1rem' }}>✅</span>
+              <span style={{ fontSize: '0.76rem', fontWeight: 600, color: '#22c55e', flex: 1 }}>Investigation complete</span>
+              <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
+                {pairs.length} tool{pairs.length !== 1 ? 's' : ''} used
+              </span>
+            </div>
           </div>
-          <p style={{ fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.55, margin: 0 }}>
-            {(r.content || '').length > 450 ? (r.content || '').substring(0, 450) + '…' : r.content}
-          </p>
-        </div>
-      ))}
+        )}
 
-      {/* Complete */}
-      {completeStep && (
-        <div className="complete-card live-step">
-          <span style={{ fontSize: '1rem' }}>✅</span>
-          <span style={{ fontSize: '0.76rem', fontWeight: 600, color: '#22c55e' }}>Investigation complete</span>
-          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-            {pairs.length} tool{pairs.length !== 1 ? 's' : ''} used
-          </span>
-        </div>
-      )}
-
-      {/* Active spinner when live and no pairs yet */}
-      {isLive && pairs.length === 0 && (
-        <div className="live-step" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.75rem', background: 'rgba(96,165,250,0.04)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8 }}>
-          <div className="spinner" />
-          <span style={{ fontSize: '0.75rem', color: '#60a5fa' }}>Agent is starting investigation…</span>
-        </div>
-      )}
-
-      <div ref={liveEndRef} />
+        <div ref={liveEndRef} />
+      </div>
     </div>
   );
 }
@@ -406,12 +436,14 @@ function App() {
     }
   };
 
+  const [chatLoading, setChatLoading] = useState(false);
+
   const sendChatMessage = async () => {
-    if (!chatInput.trim() || !selectedCase) return;
+    if (!chatInput.trim() || !selectedCase || chatLoading) return;
     const msg = chatInput;
     setChatInput('');
-    const next = [...manualChatHistory, { role: 'user', content: msg } as ChatMessage];
-    setManualChatHistory(next);
+    setManualChatHistory(p => [...p, { role: 'user', content: msg } as ChatMessage]);
+    setChatLoading(true);
     try {
       const r = await fetch(`${API_BASE}/cases/${selectedCase.id}/chat`, {
         method: 'POST',
@@ -423,8 +455,14 @@ function App() {
         setManualChatHistory(p => [...p, { role: 'model', content: data.reply } as ChatMessage]);
         if (data.action === 'FREEZE') updateCaseStatus(selectedCase.id, 'ACCOUNT_FROZEN');
         else if (data.action === 'DISMISS') updateCaseStatus(selectedCase.id, 'CLOSED');
+      } else {
+        setManualChatHistory(p => [...p, { role: 'error' as any, content: `Server error ${r.status} — please try again.` } as ChatMessage]);
       }
-    } catch (e) { console.error('Chat failed:', e); }
+    } catch (e) {
+      setManualChatHistory(p => [...p, { role: 'error' as any, content: 'Could not reach the server. Check your connection.' } as ChatMessage]);
+    } finally {
+      setChatLoading(false);
+    }
   };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -617,24 +655,27 @@ function App() {
 
                   {/* ── 4. AI Investigation ── */}
                   <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>🤖 AI Agent Investigation</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>AI Investigation</span>
                         {isInvestigating && <span className="live-dot" />}
                       </div>
                       <button
-                        className="btn btn-primary"
-                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.65rem' }}
+                        className={`btn-investigate${isInvestigating ? ' running' : ''}`}
                         onClick={() => triggerAgentInvestigation(selectedCase.id)}
                         disabled={isInvestigating}
                       >
-                        {isInvestigating ? 'Running…' : liveSteps.length > 0 || invSteps.length > 0 ? '🔄 Re-run' : '▶ Investigate'}
+                        {isInvestigating ? (
+                          <><div className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /> Investigating…</>
+                        ) : liveSteps.length > 0 || invSteps.length > 0 ? (
+                          <>↺ Re-investigate</>
+                        ) : (
+                          <>✦ Investigate</>
+                        )}
                       </button>
                     </div>
 
-                    {isInvestigating && <div className="investigating-bar" />}
-
-                    {/* Live streaming steps */}
+                    {/* Chat-style investigation window */}
                     {(isInvestigating ? liveSteps : trace).length > 0 ? (
                       <LiveInvestigationTimeline
                         steps={isInvestigating ? liveSteps : trace}
@@ -643,11 +684,32 @@ function App() {
                         setExpandedSteps={setExpandedSteps}
                         liveEndRef={liveEndRef}
                       />
-                    ) : !isInvestigating ? (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.01)', borderRadius: 8, border: '1px dashed var(--border-color)' }}>
-                        No investigation yet — click <strong>Investigate</strong> to watch the AI agent gather evidence in real time.
+                    ) : isInvestigating ? (
+                      <LiveInvestigationTimeline
+                        steps={[]}
+                        isLive={true}
+                        expandedSteps={expandedSteps}
+                        setExpandedSteps={setExpandedSteps}
+                        liveEndRef={liveEndRef}
+                      />
+                    ) : (
+                      <div className="ai-chat-window">
+                        <div className="ai-chat-header">
+                          <div className="ai-avatar">🤖</div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>FraudShield AI Agent</div>
+                            <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Ready to investigate</div>
+                          </div>
+                          <span className="model-badge">Gemini 2.5</span>
+                        </div>
+                        <div style={{ padding: '1.25rem', textAlign: 'center' }}>
+                          <div style={{ fontSize: '1.5rem', marginBottom: '0.4rem', opacity: 0.4 }}>🔍</div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.55 }}>
+                            Click <strong style={{ color: 'var(--text-secondary)' }}>✦ Investigate</strong> to watch the AI agent reason through the evidence step by step — live.
+                          </p>
+                        </div>
                       </div>
-                    ) : null}
+                    )}
                   </div>
 
                   {/* ── 5. Verdict ── */}
@@ -703,17 +765,21 @@ function App() {
                           {manualChatHistory.map((msg, i) => (
                             <div key={i} className={`chat-msg ${msg.role}`}>{msg.content}</div>
                           ))}
+                          {chatLoading && <div className="chat-msg loading">Analyzing<span className="thinking-ellipsis" /></div>}
                           <div ref={chatEndRef} />
                         </div>
                         <div className="chat-input-row">
                           <input
                             type="text"
-                            placeholder="e.g. 'Is this user usually high-risk?' or 'Freeze the account'"
+                            placeholder="e.g. 'Why was this flagged?' or 'Freeze the account'"
                             value={chatInput}
                             onChange={e => setChatInput(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') sendChatMessage(); }}
+                            disabled={chatLoading}
                           />
-                          <button onClick={sendChatMessage} disabled={!chatInput.trim()}>Send</button>
+                          <button onClick={sendChatMessage} disabled={!chatInput.trim() || chatLoading}>
+                            {chatLoading ? '…' : 'Send'}
+                          </button>
                         </div>
                       </div>
                     )}

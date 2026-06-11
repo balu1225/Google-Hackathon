@@ -20,6 +20,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/api")
@@ -49,14 +52,30 @@ public class ChatController {
             .build();
 
     private String getVertexAccessToken() throws Exception {
-        GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
-        if (credentials.createScopedRequired()) {
-            credentials = credentials.createScoped(
-                Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
-            );
+        // Wrap in a future with a tight timeout — GoogleCredentials.getApplicationDefault()
+        // tries the GCP metadata server (169.254.169.254) when no local creds exist, and
+        // that call hangs for minutes instead of throwing. 5 s is enough for a real GCP
+        // environment; locally it fails fast and the caller falls back to simulation.
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+            try {
+                GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+                if (credentials.createScopedRequired()) {
+                    credentials = credentials.createScoped(
+                        Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
+                    );
+                }
+                credentials.refreshIfExpired();
+                return credentials.getAccessToken().getTokenValue();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new Exception("GCP credentials not available (metadata server unreachable) — using simulation fallback");
         }
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
     }
 
     public static class ChatRequest {
@@ -113,13 +132,12 @@ public class ChatController {
             contextBuilder.append(String.format("  Time: %s | Fraud Flag: %s\n\n", txn.getTimestamp(), txn.getIsFraud()));
 
             // Get sender's recent history
-            List<Transaction> senderHistory = transactionRepository.findTop10BySenderAccountOrderByTimestampDesc(txn.getSenderAccount());
+            List<Transaction> senderHistory = transactionRepository.findTop5BySenderAccountOrderByTimestampDesc(txn.getSenderAccount());
             if (!senderHistory.isEmpty()) {
-                contextBuilder.append("SENDER'S RECENT TRANSACTION HISTORY:\n");
+                contextBuilder.append("SENDER'S RECENT TRANSACTIONS (last 5):\n");
                 for (Transaction ht : senderHistory) {
-                    contextBuilder.append(String.format("  - %s: $%.2f at %s (%s) via %s | Fraud: %s\n",
-                            ht.getTransactionId(), ht.getAmount(), ht.getLocation(),
-                            ht.getMerchantCategory(), ht.getDeviceUsed(), ht.getIsFraud()));
+                    contextBuilder.append(String.format("  - $%.2f at %s via %s | Fraud: %s\n",
+                            ht.getAmount(), ht.getLocation(), ht.getDeviceUsed(), ht.getIsFraud()));
                 }
                 contextBuilder.append("\n");
             }
@@ -196,8 +214,10 @@ public class ChatController {
             requestBody.put("contents", contents);
 
             Map<String, Object> generationConfig = new HashMap<>();
-            generationConfig.put("maxOutputTokens", 1024);
+            generationConfig.put("maxOutputTokens", 512);
             generationConfig.put("temperature", 0.7);
+            // Disable extended thinking for faster chat responses
+            generationConfig.put("thinkingConfig", Map.of("thinkingBudget", 0));
             requestBody.put("generationConfig", generationConfig);
 
             String requestBodyJson = objectMapper.writeValueAsString(requestBody);
@@ -212,7 +232,7 @@ public class ChatController {
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + accessToken)
                     .POST(HttpRequest.BodyPublishers.ofString(requestBodyJson))
-                    .timeout(Duration.ofSeconds(20))
+                    .timeout(Duration.ofSeconds(30))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

@@ -17,6 +17,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Service
 public class GeminiService {
@@ -28,14 +31,26 @@ public class GeminiService {
     private String region;
 
     private String getVertexAccessToken() throws Exception {
-        GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
-        if (credentials.createScopedRequired()) {
-            credentials = credentials.createScoped(
-                Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
-            );
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+            try {
+                GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+                if (credentials.createScopedRequired()) {
+                    credentials = credentials.createScoped(
+                        Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
+                    );
+                }
+                credentials.refreshIfExpired();
+                return credentials.getAccessToken().getTokenValue();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new Exception("GCP credentials unavailable (metadata server unreachable) — using simulation fallback");
         }
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
     }
 
     private final HttpClient httpClient = HttpClient.newBuilder()

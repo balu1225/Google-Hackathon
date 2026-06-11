@@ -24,6 +24,9 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.Iterator;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * AgentService — The core agentic loop engine.
@@ -691,13 +694,25 @@ public class AgentService {
     }
 
     private String getVertexAccessToken() throws Exception {
-        GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
-        if (credentials.createScopedRequired()) {
-            credentials = credentials.createScoped(
-                Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
-            );
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+            try {
+                GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+                if (credentials.createScopedRequired()) {
+                    credentials = credentials.createScoped(
+                        Collections.singletonList("https://www.googleapis.com/auth/cloud-platform")
+                    );
+                }
+                credentials.refreshIfExpired();
+                return credentials.getAccessToken().getTokenValue();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new Exception("GCP credentials unavailable (metadata server unreachable) — using simulation fallback");
         }
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
     }
 }
