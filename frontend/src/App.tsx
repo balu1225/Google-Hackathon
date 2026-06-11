@@ -82,29 +82,6 @@ const timeAgo = (iso: string) => {
   return `${Math.floor(h / 24)}d ago`;
 };
 
-const generateFraudStory = (txn: Transaction, user: User | null): string => {
-  const time = txn.timestamp.split('T')[1]?.substring(0, 5) || '';
-  const amount = `$${txn.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const channel = txn.paymentChannel || txn.transactionType;
-  const anomalies: string[] = [];
-
-  if (user) {
-    if (!user.frequentLocations.includes(txn.location))
-      anomalies.push(`the location (${txn.location}) is outside their usual area — they normally transact in ${user.frequentLocations.slice(0, 2).join(' or ')}`);
-    if (!user.frequentDevices.includes(txn.deviceUsed))
-      anomalies.push(`an unfamiliar device type (${txn.deviceUsed}) was used — normally they use ${user.frequentDevices.slice(0, 2).join(' or ')}`);
-    if (txn.amount > user.averageTransactionValue * 2)
-      anomalies.push(`the amount is ${(txn.amount / user.averageTransactionValue).toFixed(1)}× their typical transaction of $${user.averageTransactionValue.toFixed(0)}`);
-  }
-
-  const base = `At ${time || 'an unknown time'}, account ${txn.senderAccount} sent ${amount} to ${txn.receiverAccount} via ${channel}.`;
-  if (anomalies.length === 0)
-    return `${base} The AI anomaly engine detected irregular scoring patterns in this transaction.`;
-  if (anomalies.length === 1)
-    return `${base} This was flagged because ${anomalies[0]}.`;
-  const last = anomalies.pop();
-  return `${base} This was flagged because ${anomalies.join(', ')} — and also because ${last}.`;
-};
 
 const getRiskColor = (risk: number) => {
   if (risk >= 0.7) return '#ef4444';
@@ -390,16 +367,40 @@ function App() {
 
   const startIngestion = () => { setIsIngesting(true); fetch(`${API_BASE}/ingest/start`, { method: 'POST' }).catch(() => setIsIngesting(false)); };
   const stopIngestion = () => { fetch(`${API_BASE}/ingest/stop`, { method: 'POST' }).then(r => { if (r.ok) setIsIngesting(false); }); };
+  const resetAndReingest = async () => {
+    if (!window.confirm('This will clear all cases, transactions and users then restart the live feed. Continue?')) return;
+    await fetch(`${API_BASE}/debug/clear`, { method: 'DELETE' });
+    setCases([]); setTransactions([]); setUsersMap({}); setTotalCount(0);
+    setSelectedCase(null); setSelectedTxn(null); setSelectedUser(null);
+    startIngestion();
+  };
 
-  const selectCase = (c: FraudCase) => {
+  const fetchUser = async (accountId: string): Promise<User | null> => {
+    if (usersMap[accountId]) return usersMap[accountId];
+    try {
+      const r = await fetch(`${API_BASE}/users/${accountId}`);
+      if (r.ok) {
+        const u: User = await r.json();
+        setUsersMap(prev => ({ ...prev, [accountId]: u }));
+        return u;
+      }
+    } catch {}
+    return null;
+  };
+
+  const selectCase = async (c: FraudCase) => {
     setSelectedCase(c);
-    setSelectedUser(usersMap[c.accountId] || null);
+    setSelectedTxn(null);
+    const user = await fetchUser(c.accountId);
+    setSelectedUser(user);
     const local = transactions.find(t => t.transactionId === c.transactionId);
     if (local) { setSelectedTxn(local); return; }
-    fetch(`${API_BASE}/transactions`).then(r => r.json()).then((txns: Transaction[]) => {
+    try {
+      const r = await fetch(`${API_BASE}/transactions`);
+      const txns: Transaction[] = await r.json();
       const found = txns.find(t => t.transactionId === c.transactionId);
       if (found) setSelectedTxn(found);
-    });
+    } catch {}
   };
 
   const updateCaseStatus = (caseId: string, status: string) => {
@@ -530,6 +531,7 @@ function App() {
             ? <button onClick={stopIngestion} className="btn btn-danger">⏹ Stop Stream</button>
             : <button onClick={startIngestion} className="btn btn-primary">▶ Stream Feed</button>
           }
+          <button onClick={resetAndReingest} className="btn btn-secondary" style={{ fontSize: '0.65rem', opacity: 0.7 }} title="Clear all data and restart live feed">⟳ Reset Demo</button>
         </div>
       </header>
 
@@ -615,11 +617,11 @@ function App() {
                   </div>
 
                   {/* ── 2. What Happened ── */}
-                  {selectedTxn && (
+                  {selectedCase.aiReasoning && (
                     <div style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: '0.9rem 1rem', marginBottom: '1rem' }}>
                       <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: '#60a5fa', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>📖 What happened</div>
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-primary)', lineHeight: 1.55, margin: 0 }}>
-                        {generateFraudStory(selectedTxn, selectedUser)}
+                        {selectedCase.aiReasoning}
                       </p>
                     </div>
                   )}
@@ -819,11 +821,11 @@ function App() {
                           <tr
                             key={t.transactionId}
                             className={`${t.isFraud ? 'fraud' : ''} ${selectedTxn?.transactionId === t.transactionId ? 'active' : ''}`}
-                            onClick={() => {
+                            onClick={async () => {
                               setSelectedTxn(t);
                               const mc = cases.find(c => c.transactionId === t.transactionId);
-                              if (mc) { setSelectedCase(mc); setSelectedUser(usersMap[mc.accountId] || null); }
-                              else { setSelectedCase(null); setSelectedUser(usersMap[t.senderAccount] || null); }
+                              if (mc) { setSelectedCase(mc); setSelectedUser(await fetchUser(mc.accountId)); }
+                              else { setSelectedCase(null); setSelectedUser(await fetchUser(t.senderAccount)); }
                             }}
                           >
                             <td style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{t.timestamp.split('T')[1]?.substring(0, 8) || t.timestamp}</td>
@@ -877,8 +879,9 @@ function App() {
                     ))}
                   </>
                 ) : (
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid var(--border-color)' }}>
-                    No behavioral baseline for account {selectedTxn.senderAccount}.
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid var(--border-color)', lineHeight: 1.5 }}>
+                    <span style={{ display: 'block', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>📊 Baseline not yet established</span>
+                    Account {selectedTxn.senderAccount} hasn't built a behavioral profile yet — more transaction history needed.
                   </div>
                 )}
 
