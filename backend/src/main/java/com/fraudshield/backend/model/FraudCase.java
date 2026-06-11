@@ -22,6 +22,7 @@ public class FraudCase {
     private String customerExplanation;
     private String regulatoryAuditRecord;
     private String investigationReport;
+    private String agentTrace;
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -52,4 +53,7 @@ public class FraudCase {
 
     public String getInvestigationReport() { return investigationReport; }
     public void setInvestigationReport(String investigationReport) { this.investigationReport = investigationReport; }
+
+    public String getAgentTrace() { return agentTrace; }
+    public void setAgentTrace(String agentTrace) { this.agentTrace = agentTrace; }
 }

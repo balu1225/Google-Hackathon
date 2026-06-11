@@ -44,6 +44,9 @@ public class IngestionService implements DisposableBean {
     private GeminiService geminiService;
 
     @Autowired
+    private AgentService agentService;
+
+    @Autowired
     private LiveStreamWebSocketHandler webSocketHandler;
 
     @Autowired
@@ -422,14 +425,21 @@ public class IngestionService implements DisposableBean {
 
                             if (analysis.getRiskScore() > 0.7) {
                                 try {
-                                    System.out.println("Risk score > 0.7 (" + analysis.getRiskScore() + "). Running autonomous investigation agent for transaction " + t.getTransactionId() + "...");
-                                    List<Transaction> receiverHistory = transactionRepository.findTop10ByReceiverAccountOrderByTimestampDesc(t.getReceiverAccount());
-                                    String reportJson = geminiService.runAgentInvestigation(finalUser, t, history, receiverHistory);
-                                    fc.setInvestigationReport(reportJson);
-                                    System.out.println("Autonomous investigation report completed for transaction " + t.getTransactionId());
+                                    System.out.println("Risk score > 0.7 (" + analysis.getRiskScore() + "). Launching autonomous agent investigation for case " + fc.getId() + "...");
+                                    // Use the real agentic loop — Gemini autonomously decides which tools to call
+                                    String traceJson = agentService.investigateCase(fc.getId());
+                                    System.out.println("Autonomous agent investigation completed for case " + fc.getId() + ". Trace length: " + traceJson.length());
                                 } catch (Exception agentEx) {
                                     System.err.println("Error running autonomous agent investigation for case: " + fc.getId());
                                     agentEx.printStackTrace();
+                                    // Fallback to old hardcoded pipeline
+                                    try {
+                                        List<Transaction> receiverHistory = transactionRepository.findTop10ByReceiverAccountOrderByTimestampDesc(t.getReceiverAccount());
+                                        String reportJson = geminiService.runAgentInvestigation(finalUser, t, history, receiverHistory);
+                                        fc.setInvestigationReport(reportJson);
+                                    } catch (Exception fallbackEx) {
+                                        System.err.println("Fallback investigation also failed: " + fallbackEx.getMessage());
+                                    }
                                 }
                             }
 

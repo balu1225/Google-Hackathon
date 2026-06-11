@@ -35,6 +35,9 @@ public class FraudCaseController {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private com.fraudshield.backend.service.AgentService agentService;
+
     @GetMapping("/cases")
     public ResponseEntity<List<FraudCase>> getAllCases() {
         return ResponseEntity.ok(fraudCaseRepository.findTop500ByOrderByDetectedAtDesc());
@@ -104,6 +107,41 @@ public class FraudCaseController {
         return ResponseEntity.notFound().build();
     }
 
+    /**
+     * Trigger the autonomous investigation agent on a specific fraud case.
+     * The agent uses Gemini function calling to autonomously decide which tools
+     * to call, gather evidence, and submit its findings.
+     */
+    @PostMapping("/cases/{caseId}/investigate")
+    public ResponseEntity<java.util.Map<String, Object>> investigateCase(@PathVariable String caseId) {
+        Optional<FraudCase> caseOpt = fraudCaseRepository.findById(caseId);
+        if (caseOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        String traceJson = agentService.investigateCase(caseId);
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        result.put("caseId", caseId);
+        result.put("trace", traceJson);
+        result.put("status", "completed");
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Retrieve the agent trace for a specific fraud case.
+     */
+    @GetMapping("/cases/{caseId}/trace")
+    public ResponseEntity<String> getCaseTrace(@PathVariable String caseId) {
+        Optional<FraudCase> caseOpt = fraudCaseRepository.findById(caseId);
+        if (caseOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        String trace = caseOpt.get().getAgentTrace();
+        if (trace == null) {
+            return ResponseEntity.ok("[]");
+        }
+        return ResponseEntity.ok(trace);
+    }
+
     @GetMapping("/users")
     public ResponseEntity<List<User>> getAllUsers() {
         return ResponseEntity.ok(userRepository.findAll());
@@ -133,3 +171,4 @@ public class FraudCaseController {
         return ResponseEntity.ok("Cleared all transactions and cases successfully.");
     }
 }
+

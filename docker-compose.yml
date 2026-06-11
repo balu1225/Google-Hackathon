@@ -12,5 +12,25 @@ services:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
 
+  backend:
+    build: ./backend
+    container_name: fraudshield-backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongodb
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://admin:password@mongodb:27017/fraudshield?authSource=admin
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCP_REGION: ${GCP_REGION:-us-central1}
+
+  frontend:
+    build: ./frontend
+    container_name: fraudshield-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
 volumes:
   mongodb_data:
