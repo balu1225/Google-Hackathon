@@ -4,6 +4,16 @@
 
 set -e
 
+# ── Load environment variables ──
+if [ -f .env ]; then
+  export $(grep -v '^#' .env | xargs)
+fi
+
+if [ -z "$MONGODB_ATLAS_URI" ]; then
+  echo "❌ ERROR: MONGODB_ATLAS_URI is not set. Set it in .env or export it before running."
+  exit 1
+fi
+
 # ── Configuration ──
 PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
@@ -37,10 +47,6 @@ cd ..
 echo ""
 echo "▶ Deploying backend to Cloud Run..."
 
-# NOTE: You need to set MONGODB_URI to your MongoDB Atlas connection string
-# Replace the placeholder below with your actual MongoDB Atlas URI
-MONGODB_URI="${MONGODB_URI:-mongodb+srv://admin:password@cluster0.xxxxx.mongodb.net/fraudshield?retryWrites=true&w=majority}"
-
 gcloud run deploy fraudshield-backend \
   --image "$BACKEND_IMAGE" \
   --platform managed \
@@ -51,7 +57,7 @@ gcloud run deploy fraudshield-backend \
   --cpu 2 \
   --min-instances 0 \
   --max-instances 3 \
-  --set-env-vars "SPRING_DATA_MONGODB_URI=$MONGODB_URI,GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION" \
+  --set-env-vars "SPRING_DATA_MONGODB_URI=$MONGODB_ATLAS_URI,GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION" \
   --timeout=300s
 
 # Get the backend URL
@@ -63,7 +69,8 @@ echo ""
 echo "▶ Building frontend Docker image..."
 cd frontend
 gcloud builds submit \
-  --tag "$FRONTEND_IMAGE" \
+  --config cloudbuild.yaml \
+  --substitutions "_VITE_BACKEND_URL=$BACKEND_URL,_IMAGE=$FRONTEND_IMAGE" \
   --timeout=600s
 cd ..
 
@@ -91,7 +98,3 @@ echo "  Frontend: $FRONTEND_URL"
 echo "  Backend:  $BACKEND_URL"
 echo "  API Docs: $BACKEND_URL/swagger-ui/index.html"
 echo "═══════════════════════════════════════════"
-echo ""
-echo "⚠️  IMPORTANT: Update the frontend API_BASE and WS_URL"
-echo "   in App.tsx to point to: $BACKEND_URL"
-echo "   Then rebuild and redeploy the frontend."

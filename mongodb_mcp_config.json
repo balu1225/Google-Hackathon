@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mongodb-fraudshield": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mongodb-js/mongodb-mcp-server",
+        "--connectionString",
+        "${MONGODB_ATLAS_URI}"
+      ]
+    },
+    "fraudshield-tools": {
+      "command": "python3",
+      "args": ["mcp_server.py"]
+    }
+  }
+}

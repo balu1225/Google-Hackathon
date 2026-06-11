@@ -1,0 +1,16 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'VITE_BACKEND_URL=${_VITE_BACKEND_URL}'
+      - '-t'
+      - '${_IMAGE}'
+      - '.'
+
+substitutions:
+  _VITE_BACKEND_URL: 'http://localhost:8080'
+  _IMAGE: 'gcr.io/PROJECT_ID/fraudshield-frontend'
+
+images:
+  - '${_IMAGE}'

@@ -7,9 +7,9 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 
-# Build with production API URL (override at deploy time)
-ARG VITE_API_BASE=http://localhost:8080/api
-ARG VITE_WS_URL=ws://localhost:8080/ws/stream
+# VITE_BACKEND_URL is baked in at build time (e.g. Cloud Run backend URL)
+ARG VITE_BACKEND_URL=http://localhost:8080
+ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
 RUN npm run build
 
 FROM nginx:alpine

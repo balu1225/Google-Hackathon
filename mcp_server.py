@@ -1,15 +1,20 @@
 import httpx
+import os
 import pymongo
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP Server
 mcp = FastMCP("FraudShield")
 
-# Database client for direct queries
-mongo_client = pymongo.MongoClient("mongodb://admin:password@localhost:27017/")
+# Database client — prefers MongoDB Atlas URI, falls back to local Docker
+MONGO_URI = os.environ.get(
+    "MONGODB_ATLAS_URI",
+    os.environ.get("MONGODB_URI", "mongodb://admin:password@localhost:27017/")
+)
+mongo_client = pymongo.MongoClient(MONGO_URI)
 db = mongo_client["fraudshield"]
 
-API_BASE = "http://localhost:8080/api"
+API_BASE = os.environ.get("API_BASE", "http://localhost:8080/api")
 
 @mcp.tool()
 async def get_open_cases() -> str:
@@ -114,6 +119,53 @@ async def submit_investigation_report(case_id: str, report_json: str) -> str:
                 return f"Error submitting report: {response.text}"
         except Exception as e:
             return f"Error connecting to backend: {str(e)}"
+
+@mcp.tool()
+async def get_fraud_network_stats() -> str:
+    """
+    Query MongoDB Atlas to produce a real-time fraud network intelligence report.
+    Returns aggregate statistics: total cases, high-risk accounts, most targeted receivers,
+    and velocity anomaly counts — powered by MongoDB Atlas aggregation pipeline.
+    """
+    try:
+        # Aggregate fraud case stats
+        total_cases = db["fraud_cases"].count_documents({})
+        open_cases = db["fraud_cases"].count_documents({"status": "OPEN"})
+        frozen_accounts = db["fraud_cases"].count_documents({"status": "ACCOUNT_FROZEN"})
+
+        # Top receivers (potential money mules) — accounts receiving from 3+ unique senders
+        pipeline = [
+            {"$group": {"_id": "$receiverAccount", "uniqueSenders": {"$addToSet": "$senderAccount"}, "totalReceived": {"$sum": "$amount"}}},
+            {"$project": {"receiverAccount": "$_id", "senderCount": {"$size": "$uniqueSenders"}, "totalReceived": 1}},
+            {"$match": {"senderCount": {"$gte": 2}}},
+            {"$sort": {"senderCount": -1}},
+            {"$limit": 5}
+        ]
+        mule_candidates = list(db["transactions"].aggregate(pipeline))
+
+        # High-value transaction anomalies in last 24 hours
+        from datetime import datetime, timedelta
+        since = datetime.utcnow() - timedelta(hours=24)
+        recent_high_risk = db["transactions"].count_documents({
+            "timestamp": {"$gte": since.isoformat()},
+            "isFraud": True
+        })
+
+        result = f"FraudShield Network Intelligence Report (MongoDB Atlas):\n"
+        result += f"  Total Cases: {total_cases} | Open: {open_cases} | Accounts Frozen: {frozen_accounts}\n"
+        result += f"  High-Risk Transactions (last 24h): {recent_high_risk}\n"
+
+        if mule_candidates:
+            result += f"\nSuspected Money Mule Accounts (receiving from multiple senders):\n"
+            for m in mule_candidates:
+                result += f"  - Account {m['_id']}: {m['senderCount']} unique senders, ${m['totalReceived']:.2f} total received\n"
+        else:
+            result += "\nNo multi-sender receiver patterns detected currently.\n"
+
+        return result
+    except Exception as e:
+        return f"Error running Atlas aggregation: {str(e)}"
+
 
 if __name__ == "__main__":
     import sys

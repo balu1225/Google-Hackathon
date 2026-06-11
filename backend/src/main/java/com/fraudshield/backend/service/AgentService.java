@@ -322,6 +322,7 @@ public class AgentService {
         goalStep.put("content", goal);
         goalStep.put("timestamp", LocalDateTime.now().toString());
         traceLog.add(goalStep);
+        broadcastStep(caseId, goalStep);
 
         for (int iteration = 1; iteration <= MAX_AGENT_ITERATIONS; iteration++) {
             System.out.println("Agent iteration " + iteration + " for case " + caseId);
@@ -364,7 +365,9 @@ public class AgentService {
                 errorStep.put("step", iteration);
                 errorStep.put("type", "ERROR");
                 errorStep.put("content", "Vertex AI returned status " + response.statusCode());
+                errorStep.put("timestamp", LocalDateTime.now().toString());
                 traceLog.add(errorStep);
+                broadcastStep(caseId, errorStep);
                 break;
             }
 
@@ -400,11 +403,14 @@ public class AgentService {
                     toolCallStep.put("args", objectMapper.writeValueAsString(args));
                     toolCallStep.put("timestamp", LocalDateTime.now().toString());
                     traceLog.add(toolCallStep);
+                    broadcastStep(caseId, toolCallStep);
 
                     System.out.println("Agent calling tool: " + functionName + " with args: " + args);
 
+                    long toolStart = System.currentTimeMillis();
                     // Execute the tool
                     String toolResult = executeTool(functionName, args);
+                    long toolMs = System.currentTimeMillis() - toolStart;
 
                     // Log the tool result
                     ObjectNode toolResultStep = objectMapper.createObjectNode();
@@ -412,8 +418,10 @@ public class AgentService {
                     toolResultStep.put("type", "TOOL_RESULT");
                     toolResultStep.put("tool", functionName);
                     toolResultStep.put("result", toolResult.length() > 500 ? toolResult.substring(0, 500) + "..." : toolResult);
+                    toolResultStep.put("durationMs", toolMs);
                     toolResultStep.put("timestamp", LocalDateTime.now().toString());
                     traceLog.add(toolResultStep);
+                    broadcastStep(caseId, toolResultStep);
 
                     // Build function response part
                     Map<String, Object> functionResponse = new HashMap<>();
@@ -432,6 +440,7 @@ public class AgentService {
                     reasoningStep.put("content", reasoning);
                     reasoningStep.put("timestamp", LocalDateTime.now().toString());
                     traceLog.add(reasoningStep);
+                    broadcastStep(caseId, reasoningStep);
                 }
             }
 
@@ -449,6 +458,7 @@ public class AgentService {
                 doneStep.put("content", "Agent investigation complete.");
                 doneStep.put("timestamp", LocalDateTime.now().toString());
                 traceLog.add(doneStep);
+                broadcastStep(caseId, doneStep);
                 break;
             }
         }
@@ -670,6 +680,14 @@ public class AgentService {
         } catch (Exception e) {
             return "[]";
         }
+    }
+
+    private void broadcastStep(String caseId, ObjectNode step) {
+        try {
+            String json = String.format("{\"type\":\"INVESTIGATION_STEP\",\"caseId\":\"%s\",\"step\":%s}",
+                caseId, objectMapper.writeValueAsString(step));
+            webSocketHandler.broadcast(json);
+        } catch (Exception e) { /* non-fatal */ }
     }
 
     private String getVertexAccessToken() throws Exception {

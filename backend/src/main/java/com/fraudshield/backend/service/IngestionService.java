@@ -126,14 +126,11 @@ public class IngestionService implements DisposableBean {
         long txCount = transactionRepository.count();
         long uCount = userRepository.count();
         System.out.println(String.format("Debug: MongoDB counts - Transactions: %d, Users: %d", txCount, uCount));
-        // Force fresh database seeding to recalculate baselines from historical data
-        /*
         if (txCount > 0 && uCount > 0) {
-            System.out.println("Database is already seeded with transactions and user profiles. Loading streamable transaction pool...");
+            System.out.println("Database already seeded (" + txCount + " transactions, " + uCount + " users). Loading streamable pool only.");
             loadStreamableTransactionsOnly(filePath);
             return;
         }
-        */
 
         System.out.println("Initializing dynamic 95/5 database seed from: " + filePath);
         
@@ -217,14 +214,21 @@ public class IngestionService implements DisposableBean {
             }
             u.setAverageTransactionValue(sum / userTxns.size());
 
-            java.util.Set<String> locations = new java.util.HashSet<>();
-            java.util.Set<String> devices = new java.util.HashSet<>();
+            // Frequency-weighted baseline: count occurrences, keep top-3 locations and top-2 devices
+            java.util.Map<String, Long> locationFreq = new java.util.HashMap<>();
+            java.util.Map<String, Long> deviceFreq = new java.util.HashMap<>();
             for (Transaction t : userTxns) {
-                if (t.getLocation() != null) locations.add(t.getLocation());
-                if (t.getDeviceUsed() != null) devices.add(t.getDeviceUsed());
+                if (t.getLocation() != null) locationFreq.merge(t.getLocation(), 1L, Long::sum);
+                if (t.getDeviceUsed() != null) deviceFreq.merge(t.getDeviceUsed(), 1L, Long::sum);
             }
-            u.setFrequentLocations(new java.util.ArrayList<>(locations));
-            u.setFrequentDevices(new java.util.ArrayList<>(devices));
+            List<String> topLocations = locationFreq.entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(3).map(java.util.Map.Entry::getKey).collect(java.util.stream.Collectors.toList());
+            List<String> topDevices = deviceFreq.entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(2).map(java.util.Map.Entry::getKey).collect(java.util.stream.Collectors.toList());
+            u.setFrequentLocations(topLocations);
+            u.setFrequentDevices(topDevices);
 
             usersToInsert.add(u);
         }

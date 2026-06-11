@@ -51,13 +51,219 @@ interface User {
   averageTransactionValue: number;
 }
 
-const API_BASE = "http://localhost:8080/api";
-const WS_URL = "ws://localhost:8080/ws/stream";
+interface TraceStep {
+  step: number;
+  type: 'GOAL' | 'TOOL_CALL' | 'TOOL_RESULT' | 'REASONING' | 'COMPLETE' | 'ERROR';
+  tool?: string;
+  args?: string;
+  result?: string;
+  content?: string;
+  timestamp?: string;
+  durationMs?: number;
+}
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
+const API_BASE = `${BACKEND_URL}/api`;
+const WS_URL = BACKEND_URL.replace(/^http/, "ws") + "/ws/stream";
 
 const normalizeRisk = (score: number) => {
   if (score === undefined || score === null) return 0;
   return score > 1.0 ? score / 100 : score;
 };
+
+
+const timeAgo = (iso: string) => {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+};
+
+const generateFraudStory = (txn: Transaction, user: User | null): string => {
+  const time = txn.timestamp.split('T')[1]?.substring(0, 5) || '';
+  const amount = `$${txn.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const channel = txn.paymentChannel || txn.transactionType;
+  const anomalies: string[] = [];
+
+  if (user) {
+    if (!user.frequentLocations.includes(txn.location))
+      anomalies.push(`the location (${txn.location}) is outside their usual area — they normally transact in ${user.frequentLocations.slice(0, 2).join(' or ')}`);
+    if (!user.frequentDevices.includes(txn.deviceUsed))
+      anomalies.push(`an unfamiliar device type (${txn.deviceUsed}) was used — normally they use ${user.frequentDevices.slice(0, 2).join(' or ')}`);
+    if (txn.amount > user.averageTransactionValue * 2)
+      anomalies.push(`the amount is ${(txn.amount / user.averageTransactionValue).toFixed(1)}× their typical transaction of $${user.averageTransactionValue.toFixed(0)}`);
+  }
+
+  const base = `At ${time || 'an unknown time'}, account ${txn.senderAccount} sent ${amount} to ${txn.receiverAccount} via ${channel}.`;
+  if (anomalies.length === 0)
+    return `${base} The AI anomaly engine detected irregular scoring patterns in this transaction.`;
+  if (anomalies.length === 1)
+    return `${base} This was flagged because ${anomalies[0]}.`;
+  const last = anomalies.pop();
+  return `${base} This was flagged because ${anomalies.join(', ')} — and also because ${last}.`;
+};
+
+const getRiskColor = (risk: number) => {
+  if (risk >= 0.7) return '#ef4444';
+  if (risk >= 0.4) return '#f59e0b';
+  return '#3b82f6';
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Under Review',
+  ACCOUNT_FROZEN: 'Account Frozen',
+  CLOSED: 'Dismissed',
+  INVESTIGATING: 'Investigating',
+};
+
+// ── Live Investigation Timeline Component ──
+
+const TOOL_META: Record<string, { label: string; icon: string; color: string }> = {
+  get_user_baseline:           { label: 'Reviewing account behavior profile',    icon: '👤', color: '#60a5fa' },
+  get_case_transactions:       { label: 'Analyzing transaction history',          icon: '📊', color: '#a78bfa' },
+  get_receiver_profile:        { label: 'Checking receiver for mule patterns',    icon: '🎯', color: '#f97316' },
+  get_open_cases:              { label: 'Scanning for related fraud cases',       icon: '🔍', color: '#fbbf24' },
+  submit_investigation_report: { label: 'Submitting final investigation report',  icon: '📋', color: '#34d399' },
+  update_case_status:          { label: 'Applying case decision',                 icon: '⚡', color: '#f43f5e' },
+  get_fraud_network_stats:     { label: 'Analyzing fraud network statistics',     icon: '🕸️', color: '#22d3ee' },
+};
+
+function LiveInvestigationTimeline({
+  steps,
+  isLive,
+  expandedSteps,
+  setExpandedSteps,
+  liveEndRef,
+}: {
+  steps: TraceStep[];
+  isLive: boolean;
+  expandedSteps: Set<string>;
+  setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
+  liveEndRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  // Pair TOOL_CALL with matching TOOL_RESULT
+  const pairs: { call: TraceStep; result?: TraceStep; idx: number }[] = [];
+  const reasoningSteps: TraceStep[] = [];
+  let completeStep: TraceStep | undefined;
+
+  steps.forEach(s => {
+    if (s.type === 'TOOL_CALL') {
+      pairs.push({ call: s, idx: pairs.length });
+    } else if (s.type === 'TOOL_RESULT' && pairs.length > 0) {
+      const last = pairs[pairs.length - 1];
+      if (!last.result) last.result = s;
+    } else if (s.type === 'REASONING') {
+      reasoningSteps.push(s);
+    } else if (s.type === 'COMPLETE') {
+      completeStep = s;
+    }
+  });
+
+  const toggleStep = (key: string) => {
+    setExpandedSteps(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const activePairIdx = isLive
+    ? pairs.findLastIndex(p => !p.result)
+    : -1;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+      {pairs.map(({ call, result, idx }) => {
+        const meta = TOOL_META[call.tool || ''] || { label: call.tool || 'Tool call', icon: '🔧', color: '#94a3b8' };
+        const isActive = isLive && idx === activePairIdx;
+        const isDone = !!result;
+        const key = `tool-${idx}`;
+        const isExpanded = expandedSteps.has(key);
+        const shortResult = result?.result
+          ? result.result.split('\n').filter(l => l.trim()).slice(0, 3).join('\n')
+          : '';
+        const durationMs = result?.durationMs;
+
+        return (
+          <div key={key} className={`live-step tool-call-card ${isDone ? 'done' : isActive ? 'active' : ''}`}>
+            <div className="tool-card-header" onClick={() => isDone && toggleStep(key)}>
+              {/* Status icon */}
+              {isActive ? (
+                <div className="spinner" />
+              ) : isDone ? (
+                <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>✓</span>
+              ) : (
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>○</span>
+              )}
+
+              {/* Tool icon */}
+              <span style={{ fontSize: '1rem' }}>{meta.icon}</span>
+
+              {/* Label */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.76rem', fontWeight: 600, color: isActive ? meta.color : isDone ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                  {meta.label}
+                </div>
+                {isActive && (
+                  <div style={{ fontSize: '0.62rem', color: meta.color, marginTop: '0.1rem' }}>Fetching data…</div>
+                )}
+              </div>
+
+              {/* Duration + expand toggle */}
+              {isDone && durationMs !== undefined && (
+                <span className="duration-badge">{durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}</span>
+              )}
+              {isDone && (
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginLeft: '0.25rem' }}>{isExpanded ? '▲' : '▼'}</span>
+              )}
+            </div>
+
+            {isDone && isExpanded && shortResult && (
+              <div className="tool-card-detail">{shortResult}</div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Reasoning */}
+      {reasoningSteps.map((r, i) => (
+        <div key={`reasoning-${i}`} className="reasoning-card live-step">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
+            <span style={{ fontSize: '0.85rem' }}>🧠</span>
+            <span style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#c084fc' }}>AI Conclusion</span>
+          </div>
+          <p style={{ fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.55, margin: 0 }}>
+            {(r.content || '').length > 450 ? (r.content || '').substring(0, 450) + '…' : r.content}
+          </p>
+        </div>
+      ))}
+
+      {/* Complete */}
+      {completeStep && (
+        <div className="complete-card live-step">
+          <span style={{ fontSize: '1rem' }}>✅</span>
+          <span style={{ fontSize: '0.76rem', fontWeight: 600, color: '#22c55e' }}>Investigation complete</span>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            {pairs.length} tool{pairs.length !== 1 ? 's' : ''} used
+          </span>
+        </div>
+      )}
+
+      {/* Active spinner when live and no pairs yet */}
+      {isLive && pairs.length === 0 && (
+        <div className="live-step" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.75rem', background: 'rgba(96,165,250,0.04)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8 }}>
+          <div className="spinner" />
+          <span style={{ fontSize: '0.75rem', color: '#60a5fa' }}>Agent is starting investigation…</span>
+        </div>
+      )}
+
+      <div ref={liveEndRef} />
+    </div>
+  );
+}
 
 function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -68,259 +274,198 @@ function App() {
   const [selectedCase, setSelectedCase] = useState<FraudCase | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedTxn, setSelectedTxn] = useState<Transaction | null>(null);
-  const [activeTab, setActiveTab] = useState<'assessment' | 'notice' | 'audit' | 'agent'>('assessment');
-
   const [currentPage, setCurrentPage] = useState<'cases' | 'transactions'>('cases');
   const [isInvestigating, setIsInvestigating] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<TraceStep[]>([]);
+  const [investigatingCaseId, setInvestigatingCaseId] = useState<string | null>(null);
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const liveEndRef = useRef<HTMLDivElement | null>(null);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [manualChatHistory, setManualChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [aiInvestigatorTab, setAiInvestigatorTab] = useState<'timeline' | 'report' | 'chat' | 'audit'>('timeline');
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const wsRef = useRef<WebSocket | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setManualChatHistory([]);
     setChatInput('');
-    setAiInvestigatorTab('timeline');
+    setChatExpanded(false);
   }, [selectedCase?.id]);
 
-  const [isIngesting, setIsIngesting] = useState(false);
-  const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
-  const wsRef = useRef<WebSocket | null>(null);
-
-  // Fetch initial data
   useEffect(() => {
-    fetch(`${API_BASE}/cases`)
-      .then(res => res.json())
-      .then(data => setCases(data.reverse()))
-      .catch(err => console.error("Error fetching cases:", err));
+    if (chatExpanded) chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [manualChatHistory, chatExpanded]);
 
-    fetch(`${API_BASE}/transactions/count`)
-      .then(res => res.json())
-      .then(data => setTotalCount(data))
-      .catch(err => console.error("Error fetching transactions count:", err));
+  useEffect(() => {
+    liveEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [liveSteps]);
 
-    fetch(`${API_BASE}/transactions`)
-      .then(res => res.json())
-      .then(data => setTransactions(data.reverse().slice(0, 500)))
-      .catch(err => console.error("Error fetching transactions:", err));
-
-    // Fetch user baselines to map flags on client-side
-    fetch(`${API_BASE}/users`)
-      .then(res => res.json())
-      .then((data: User[]) => {
-        const map: Record<string, User> = {};
-        data.forEach(u => {
-          map[u.accountId] = u;
-        });
-        setUsersMap(map);
-      })
-      .catch(err => console.error("Error building users map:", err));
+  useEffect(() => {
+    fetch(`${API_BASE}/cases`).then(r => r.json()).then(d => setCases(d.reverse())).catch(() => {});
+    fetch(`${API_BASE}/transactions/count`).then(r => r.json()).then(d => setTotalCount(d)).catch(() => {});
+    fetch(`${API_BASE}/transactions`).then(r => r.json()).then(d => setTransactions(d.reverse().slice(0, 500))).catch(() => {});
+    fetch(`${API_BASE}/users`).then(r => r.json()).then((d: User[]) => {
+      const map: Record<string, User> = {};
+      d.forEach(u => { map[u.accountId] = u; });
+      setUsersMap(map);
+    }).catch(() => {});
   }, []);
 
-  // WebSocket Connection
   useEffect(() => {
     connectWS();
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-    };
+    return () => { if (wsRef.current) wsRef.current.close(); };
   }, []);
 
   const connectWS = () => {
-    setWsStatus("connecting");
+    setWsStatus('connecting');
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-
-    ws.onopen = () => {
-      setWsStatus("connected");
-    };
-
-    ws.onclose = (event) => {
-      setWsStatus("disconnected");
-      if (event.code !== 1000) {
-        setTimeout(() => {
-          connectWS();
-        }, 3000);
-      }
-    };
-
-    ws.onerror = () => {
-      setWsStatus("disconnected");
-    };
-
-    ws.onmessage = (event) => {
+    ws.onopen = () => setWsStatus('connected');
+    ws.onclose = e => { setWsStatus('disconnected'); if (e.code !== 1000) setTimeout(connectWS, 3000); };
+    ws.onerror = () => setWsStatus('disconnected');
+    ws.onmessage = e => {
       try {
-        const payload = JSON.parse(event.data);
-        if (payload.type === "TRANSACTION") {
-          const newTxn: Transaction = payload.data;
+        const p = JSON.parse(e.data);
+        if (p.type === 'TRANSACTION') {
           setTransactions(prev => {
-            if (prev.some(t => t.transactionId === newTxn.transactionId)) return prev;
+            if (prev.some(t => t.transactionId === p.data.transactionId)) return prev;
             setTotalCount(c => c + 1);
-            return [newTxn, ...prev].slice(0, 500);
+            return [p.data, ...prev].slice(0, 500);
           });
-        } else if (payload.type === "FRAUD_CASE") {
-          const newCase: FraudCase = payload.data;
+        } else if (p.type === 'FRAUD_CASE') {
           setCases(prev => {
-            if (prev.some(c => c.id === newCase.id || c.transactionId === newCase.transactionId)) return prev;
-            return [newCase, ...prev].slice(0, 500);
+            if (prev.some(c => c.id === p.data.id || c.transactionId === p.data.transactionId)) return prev;
+            return [p.data, ...prev].slice(0, 500);
           });
-        } else if (payload.type === "CASE_UPDATE") {
-          const updatedCase: FraudCase = payload.data;
-          setCases(prev => prev.map(c => c.id === updatedCase.id ? updatedCase : c));
-          setSelectedCase(prev => {
-            if (prev && prev.id === updatedCase.id) return updatedCase;
-            return prev;
-          });
-        } else if (payload.type === "SYSTEM") {
-          if (payload.message === "Ingestion stopped") {
-            setIsIngesting(false);
+        } else if (p.type === 'CASE_UPDATE') {
+          setCases(prev => prev.map(c => c.id === p.data.id ? p.data : c));
+          setSelectedCase(prev => prev?.id === p.data.id ? p.data : prev);
+        } else if (p.type === 'INVESTIGATION_STEP') {
+          if (p.caseId === investigatingCaseId || investigatingCaseId) {
+            setLiveSteps(prev => [...prev, p.step as TraceStep]);
           }
-        } else if (payload.type === "BULK_LOAD_COMPLETE") {
+        } else if (p.type === 'SYSTEM' && p.message === 'Ingestion stopped') {
           setIsIngesting(false);
-          // Re-fetch everything
-          fetch(`${API_BASE}/cases`)
-            .then(res => res.json())
-            .then(data => setCases(data.reverse()));
-          fetch(`${API_BASE}/transactions/count`)
-            .then(res => res.json())
-            .then(data => setTotalCount(data));
-          fetch(`${API_BASE}/transactions`)
-            .then(res => res.json())
-            .then(data => setTransactions(data.reverse().slice(0, 500)));
+        } else if (p.type === 'BULK_LOAD_COMPLETE') {
+          setIsIngesting(false);
+          fetch(`${API_BASE}/cases`).then(r => r.json()).then(d => setCases(d.reverse()));
+          fetch(`${API_BASE}/transactions/count`).then(r => r.json()).then(d => setTotalCount(d));
+          fetch(`${API_BASE}/transactions`).then(r => r.json()).then(d => setTransactions(d.reverse().slice(0, 500)));
         }
-      } catch (e) {
-        if (event.data.includes("Connected")) {
-          setWsStatus("connected");
-        }
-      }
+      } catch { if (e.data.includes('Connected')) setWsStatus('connected'); }
     };
   };
 
-  // Ingestion Controls
-  const startIngestion = () => {
-    setIsIngesting(true);
-    fetch(`${API_BASE}/ingest/start`, {
-      method: "POST"
-    })
-      .catch(() => setIsIngesting(false));
-  };
+  const startIngestion = () => { setIsIngesting(true); fetch(`${API_BASE}/ingest/start`, { method: 'POST' }).catch(() => setIsIngesting(false)); };
+  const stopIngestion = () => { fetch(`${API_BASE}/ingest/stop`, { method: 'POST' }).then(r => { if (r.ok) setIsIngesting(false); }); };
 
-  const stopIngestion = () => {
-    fetch(`${API_BASE}/ingest/stop`, { method: "POST" })
-      .then(res => { if (res.ok) setIsIngesting(false); });
-  };
-
-  // Case Selection
   const selectCase = (c: FraudCase) => {
     setSelectedCase(c);
     setSelectedUser(usersMap[c.accountId] || null);
-    setActiveTab('assessment');
-
-    const localTxn = transactions.find(t => t.transactionId === c.transactionId);
-    if (localTxn) {
-      setSelectedTxn(localTxn);
-    } else {
-      fetch(`${API_BASE}/transactions`)
-        .then(res => res.json())
-        .then((txns: Transaction[]) => {
-          const found = txns.find(t => t.transactionId === c.transactionId);
-          if (found) setSelectedTxn(found);
-        });
-    }
+    const local = transactions.find(t => t.transactionId === c.transactionId);
+    if (local) { setSelectedTxn(local); return; }
+    fetch(`${API_BASE}/transactions`).then(r => r.json()).then((txns: Transaction[]) => {
+      const found = txns.find(t => t.transactionId === c.transactionId);
+      if (found) setSelectedTxn(found);
+    });
   };
 
-  // Update Case Status
   const updateCaseStatus = (caseId: string, status: string) => {
-    fetch(`${API_BASE}/cases/${caseId}/status?status=${status}`, { method: "PUT" })
-      .then(res => { if (res.ok) return res.json(); })
+    fetch(`${API_BASE}/cases/${caseId}/status?status=${status}`, { method: 'PUT' })
+      .then(r => r.ok ? r.json() : null)
       .then((updated: FraudCase) => {
+        if (!updated) return;
         setCases(prev => prev.map(c => c.id === caseId ? updated : c));
         setSelectedCase(updated);
       });
   };
 
-  // Trigger autonomous agent investigation
   const triggerAgentInvestigation = async (caseId: string) => {
     setIsInvestigating(true);
+    setLiveSteps([]);
+    setInvestigatingCaseId(caseId);
+    setExpandedSteps(new Set());
     try {
       const res = await fetch(`${API_BASE}/cases/${caseId}/investigate`, { method: 'POST' });
       if (res.ok) {
-        const data = await res.json();
-        // Refetch the case to get updated trace
-        const casesRes = await fetch(`${API_BASE}/cases`);
-        if (casesRes.ok) {
-          const casesData = await casesRes.json();
-          const reversed = casesData.reverse();
-          setCases(reversed);
-          const updated = reversed.find((c: any) => c.id === caseId);
-          if (updated) {
-            setSelectedCase(updated);
-          }
+        await res.json();
+        const r = await fetch(`${API_BASE}/cases`);
+        if (r.ok) {
+          const all = (await r.json()).reverse();
+          setCases(all);
+          const updated = all.find((c: FraudCase) => c.id === caseId);
+          if (updated) setSelectedCase(updated);
         }
       }
-    } catch (e) {
-      console.error("Agent run failed:", e);
-    } finally {
+    } catch (e) { console.error('Agent run failed:', e); }
+    finally {
       setIsInvestigating(false);
+      setInvestigatingCaseId(null);
     }
   };
 
-  // Send a message in the analyst-agent chat
   const sendChatMessage = async () => {
     if (!chatInput.trim() || !selectedCase) return;
-    const userMsg = chatInput;
+    const msg = chatInput;
     setChatInput('');
-    const newUserHistory = [...manualChatHistory, { role: 'user', content: userMsg } as ChatMessage];
-    setManualChatHistory(newUserHistory);
-
+    const next = [...manualChatHistory, { role: 'user', content: msg } as ChatMessage];
+    setManualChatHistory(next);
     try {
-      const res = await fetch(`${API_BASE}/cases/${selectedCase.id}/chat`, {
+      const r = await fetch(`${API_BASE}/cases/${selectedCase.id}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMsg,
-          history: manualChatHistory.map(h => ({ role: h.role, content: h.content }))
-        })
+        body: JSON.stringify({ message: msg, history: manualChatHistory.map(h => ({ role: h.role, content: h.content })) })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setManualChatHistory(prev => [...prev, { role: 'model', content: data.reply } as ChatMessage]);
-        if (data.action === 'FREEZE') {
-          updateCaseStatus(selectedCase.id, 'ACCOUNT_FROZEN');
-        } else if (data.action === 'DISMISS') {
-          updateCaseStatus(selectedCase.id, 'CLOSED');
-        }
+      if (r.ok) {
+        const data = await r.json();
+        setManualChatHistory(p => [...p, { role: 'model', content: data.reply } as ChatMessage]);
+        if (data.action === 'FREEZE') updateCaseStatus(selectedCase.id, 'ACCOUNT_FROZEN');
+        else if (data.action === 'DISMISS') updateCaseStatus(selectedCase.id, 'CLOSED');
       }
-    } catch (e) {
-      console.error("Chat message failed:", e);
-    }
+    } catch (e) { console.error('Chat failed:', e); }
   };
 
-  // Handle Infinite Scroll
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
-    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50) {
-      setVisibleCount(prev => Math.min(prev + 30, transactions.length));
-    }
+    const t = e.currentTarget;
+    if (t.scrollHeight - t.scrollTop <= t.clientHeight + 50) setVisibleCount(p => Math.min(p + 30, transactions.length));
   };
 
-  // Flag computation helper
   const getFlagDetails = (t: Transaction) => {
     const user = usersMap[t.senderAccount];
-    if (!user) return { count: 0, list: [] };
-
+    if (!user) return { count: 0, list: [] as string[] };
     const list: string[] = [];
-    if (!user.frequentLocations.includes(t.location)) list.push("Location");
-    if (!user.frequentDevices.includes(t.deviceUsed)) list.push("Device");
-    if (t.amount > user.averageTransactionValue * 2) list.push("Value");
-
+    if (!user.frequentLocations.includes(t.location)) list.push('Location');
+    if (!user.frequentDevices.includes(t.deviceUsed)) list.push('Device');
+    if (t.amount > user.averageTransactionValue * 2) list.push('Amount');
     return { count: list.length, list };
   };
 
-  // Highlight details
-  const isLocationMismatch = selectedTxn && selectedUser && !selectedUser.frequentLocations.includes(selectedTxn.location);
-  const isDeviceMismatch = selectedTxn && selectedUser && !selectedUser.frequentDevices.includes(selectedTxn.deviceUsed);
-  const isAmountAnomaly = selectedTxn && selectedUser && selectedTxn.amount > (selectedUser.averageTransactionValue * 2);
-
   const openCasesCount = cases.filter(c => c.status === 'OPEN').length;
+  const risk = selectedCase ? normalizeRisk(selectedCase.riskScore) : 0;
+  const isLocationMismatch = !!(selectedTxn && selectedUser && !selectedUser.frequentLocations.includes(selectedTxn.location));
+  const isDeviceMismatch = !!(selectedTxn && selectedUser && !selectedUser.frequentDevices.includes(selectedTxn.deviceUsed));
+  const isAmountAnomaly = !!(selectedTxn && selectedUser && selectedTxn.amount > selectedUser.averageTransactionValue * 2);
+
+  const parseTrace = (raw: string | undefined): TraceStep[] => {
+    if (!raw) return [];
+    try { return JSON.parse(raw); } catch { return []; }
+  };
+
+  const parseReport = (raw: string | undefined) => {
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+
+  const buildInvestigationSteps = (trace: TraceStep[]) => {
+    const steps: { call: TraceStep; result?: TraceStep }[] = [];
+    for (const s of trace) {
+      if (s.type === 'TOOL_CALL') steps.push({ call: s });
+      else if (s.type === 'TOOL_RESULT' && steps.length > 0) steps[steps.length - 1].result = s;
+    }
+    return { steps };
+  };
 
   return (
     <>
@@ -328,512 +473,304 @@ function App() {
         <div className="logo-container">
           <div className="logo-icon">🛡️</div>
           <div>
-            <div className="logo-text">FraudShield Dashboard</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>AI-Assisted Fraud Operations Console</div>
+            <div className="logo-text">FraudShield</div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Real-Time AI Fraud Intelligence</div>
           </div>
         </div>
 
         <div className="nav-links">
-          <button 
-            className={`nav-btn ${currentPage === 'cases' ? 'active' : ''}`}
-            onClick={() => setCurrentPage('cases')}
-          >
-            🚨 Alert Cases
-          </button>
-          <button 
-            className={`nav-btn ${currentPage === 'transactions' ? 'active' : ''}`}
-            onClick={() => setCurrentPage('transactions')}
-          >
-            📊 Transactions Feed
-          </button>
+          <button className={`nav-btn ${currentPage === 'cases' ? 'active' : ''}`} onClick={() => setCurrentPage('cases')}>🚨 Alert Cases</button>
+          <button className={`nav-btn ${currentPage === 'transactions' ? 'active' : ''}`} onClick={() => setCurrentPage('transactions')}>📊 Live Transactions</button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ 
-              width: '8px', 
-              height: '8px', 
-              borderRadius: '50%', 
-              backgroundColor: wsStatus === 'connected' ? '#2563eb' : '#dc2626',
-            }} />
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>
-              WebSocket: {wsStatus}
-            </span>
-            {wsStatus === 'disconnected' && (
-              <button onClick={connectWS} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.65rem' }}>Reconnect</button>
-            )}
+            <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: wsStatus === 'connected' ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>{wsStatus}</span>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {isIngesting ? (
-              <button onClick={stopIngestion} className="btn btn-danger">
-                Stop Ingest
-              </button>
-            ) : (
-              <button onClick={startIngestion} className="btn btn-primary">
-                Stream Feed
-              </button>
-            )}
-          </div>
+          {isIngesting
+            ? <button onClick={stopIngestion} className="btn btn-danger">⏹ Stop Stream</button>
+            : <button onClick={startIngestion} className="btn btn-primary">▶ Stream Feed</button>
+          }
         </div>
       </header>
 
       {currentPage === 'cases' ? (
         <main className="dashboard-grid">
-          {/* Column 1: Alert Queue (takes full height of left sidebar) */}
+          {/* Alert Queue */}
           <section className="column">
             <div className="column-header">
-              <h2 className="column-title">Alert cases</h2>
-              <span className="stat-bubble danger">{cases.filter(c => c.status === "OPEN").length} Active</span>
+              <h2 className="column-title">Alert Queue</h2>
+              <span className="stat-bubble danger">{openCasesCount} Active</span>
             </div>
             <div className="column-content" style={{ padding: '0.5rem' }}>
               {cases.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem', fontSize: '0.85rem' }}>
-                  No active incidents.
+                  No alerts yet. Start the stream feed to detect fraud.
                 </div>
-              ) : (
-                cases.map((c) => (
-                  <div 
-                    key={c.id} 
-                    className={`alert-card ${c.status.toLowerCase()}-case ${selectedCase?.id === c.id ? 'active' : ''}`}
-                    onClick={() => selectCase(c)}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Case: {c.transactionId}</span>
-                      <span className={`badge badge-${c.status.toLowerCase()}`}>{c.status}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Account: {c.accountId}</span>
-                      <span style={{ 
-                        fontWeight: 700, 
-                        color: normalizeRisk(c.riskScore) > 0.7 ? 'var(--color-danger)' : normalizeRisk(c.riskScore) > 0.4 ? 'var(--color-warning)' : 'var(--color-primary)'
-                      }}>Risk: {(normalizeRisk(c.riskScore) * 100).toFixed(0)}%</span>
-                    </div>
+              ) : cases.map(c => (
+                <div
+                  key={c.id}
+                  className={`alert-card ${c.status.toLowerCase()}-case ${selectedCase?.id === c.id ? 'active' : ''}`}
+                  onClick={() => selectCase(c)}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>{c.transactionId}</span>
+                    <span className={`badge badge-${c.status.toLowerCase()}`}>{STATUS_LABELS[c.status] || c.status}</span>
                   </div>
-                ))
-              )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    <span>{c.accountId}</span>
+                    <span style={{ fontWeight: 700, color: getRiskColor(normalizeRisk(c.riskScore)) }}>
+                      {(normalizeRisk(c.riskScore) * 100).toFixed(0)}% risk
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{timeAgo(c.detectedAt)}</div>
+                </div>
+              ))}
             </div>
           </section>
 
-          {/* Right Column: Split 50/50 side-by-side Workbench & AI Investigator */}
-          <section className="column" style={{ background: '#090d16', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px', borderLeft: '1px solid var(--border-color)' }}>
-            {/* Left Workspace Panel: Case Profile & Evidence */}
-            <div className="column-content" style={{ borderRight: '1px solid var(--border-color)', height: '100%', overflowY: 'auto' }}>
-              <div className="column-title" style={{ marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
-                Case Profile & Evidence
+          {/* Unified Case Intelligence Panel */}
+          <section className="column" style={{ background: '#080c17', borderLeft: '1px solid var(--border-color)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            {!selectedCase ? (
+              <div className="details-placeholder" style={{ margin: 'auto' }}>
+                <span className="details-placeholder-icon">🔎</span>
+                <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>Select an alert to investigate</p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Click any case in the queue to see a full fraud breakdown.</p>
               </div>
-              {!selectedTxn ? (
-                <div className="details-placeholder">
-                  <span className="details-placeholder-icon">🔎</span>
-                  <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>Select an alert case to audit details</p>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    View side-by-side transaction metrics against client baseline profiles and review AI explanations.
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
-                    <div>
-                      <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedTxn.transactionId}</h3>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Type: {selectedTxn.transactionType} | Category: {selectedTxn.merchantCategory}</p>
-                    </div>
-                    {selectedCase && (
-                      <span className={`badge badge-${selectedCase.status.toLowerCase()}`}>{selectedCase.status}</span>
-                    )}
-                  </div>
+            ) : (() => {
+              const trace = parseTrace(selectedCase.agentTrace);
+              const report = parseReport(selectedCase.investigationReport);
+              const { steps: invSteps } = buildInvestigationSteps(trace);
+              const riskPct = (risk * 100).toFixed(0);
+              const riskColor = getRiskColor(risk);
 
-                  <div className="section-title">Baseline Verification</div>
-                  {selectedUser ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        <strong>Cardholder:</strong> {selectedUser.name} (Acc: {selectedUser.accountId})
-                      </div>
-                      
-                      <div className="comparison-grid">
-                        <div className={`compare-box ${isLocationMismatch ? 'mismatch' : ''}`}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
-                            <span className="compare-title">Transaction Location</span>
-                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: isLocationMismatch ? 'var(--color-danger)' : '#10b981' }}>
-                              {isLocationMismatch ? '❌ ANOMALY' : '✅ MATCH'}
-                            </span>
-                          </div>
-                          <div className="compare-val">{selectedTxn.location}</div>
-                          <div style={{ fontSize: '0.7rem', opacity: 0.9, marginTop: '0.25rem' }}>
-                            Baseline: {selectedUser.frequentLocations.join(", ")}
-                          </div>
-                        </div>
+              return (
+                <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem' }}>
 
-                        <div className={`compare-box ${isDeviceMismatch ? 'mismatch' : ''}`}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
-                            <span className="compare-title">Device Used</span>
-                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: isDeviceMismatch ? 'var(--color-danger)' : '#10b981' }}>
-                              {isDeviceMismatch ? '❌ ANOMALY' : '✅ MATCH'}
-                            </span>
-                          </div>
-                          <div className="compare-val">{selectedTxn.deviceUsed}</div>
-                          <div style={{ fontSize: '0.7rem', opacity: 0.9, marginTop: '0.25rem' }}>
-                            Baseline: {selectedUser.frequentDevices.join(", ")}
-                          </div>
-                        </div>
-
-                        <div className={`compare-box ${isAmountAnomaly ? 'mismatch' : ''}`}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
-                            <span className="compare-title">Amount</span>
-                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: isAmountAnomaly ? 'var(--color-danger)' : '#10b981' }}>
-                              {isAmountAnomaly ? '❌ ANOMALY' : '✅ MATCH'}
-                            </span>
-                          </div>
-                          <div className="compare-val">${selectedTxn.amount.toFixed(2)}</div>
-                          <div style={{ fontSize: '0.7rem', opacity: 0.9, marginTop: '0.25rem' }}>
-                            Baseline Avg: ${selectedUser.averageTransactionValue.toFixed(2)} (Limit: ${(selectedUser.averageTransactionValue * 2).toFixed(2)})
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        <strong>Cardholder:</strong> Bulk Loaded Client (Acc: {selectedTxn.senderAccount})
-                      </div>
-                      <div style={{ 
-                        fontSize: '0.8rem', 
-                        color: 'var(--text-secondary)', 
-                        background: 'rgba(255, 255, 255, 0.02)', 
-                        padding: '0.75rem', 
-                        borderRadius: '6px', 
-                        border: '1px solid var(--border-color)',
-                        lineHeight: '1.4'
-                      }}>
-                        <div style={{ fontWeight: 600, color: 'var(--color-primary)', marginBottom: '0.25rem' }}>Baseline Not Established</div>
-                        This transaction is from a newly imported bulk account. A historical behavioral baseline has not been compiled for this client yet.
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="section-title">Advanced Anomaly Telemetry</div>
-                  <div style={{ 
-                    background: 'rgba(0, 0, 0, 0.2)', 
-                    border: '1px solid var(--border-color)', 
-                    borderRadius: '6px', 
-                    padding: '0.75rem', 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: '0.5rem',
-                    fontSize: '0.8rem',
-                    marginBottom: '1rem'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>IP Address</span>
-                      <span style={{ fontWeight: 500, fontFamily: 'var(--font-mono)' }}>{selectedTxn.ipAddress || 'N/A'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Device Hash</span>
-                      <span style={{ fontWeight: 500, fontFamily: 'var(--font-mono)' }}>{selectedTxn.deviceHash || 'N/A'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Payment Channel</span>
-                      <span style={{ fontWeight: 500, textTransform: 'capitalize' }}>{selectedTxn.paymentChannel || 'N/A'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Time Since Last Txn</span>
-                      <span style={{ fontWeight: 500 }}>{selectedTxn.timeSinceLastTransaction !== undefined && selectedTxn.timeSinceLastTransaction !== null ? `${selectedTxn.timeSinceLastTransaction.toFixed(2)} min` : 'N/A'}</span>
-                    </div>
-
-                    {selectedTxn.fraudType && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--color-danger)', fontWeight: 600 }}>
-                        <span>Fraud Type Flag</span>
-                        <span>{selectedTxn.fraudType}</span>
-                      </div>
-                    )}
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', margin: '0.25rem 0' }} />
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', marginTop: '0.25rem' }}>
-                      <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.01)', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Spending Dev</div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, color: (selectedTxn.spendingDeviationScore || 0) > 2 ? 'var(--color-danger)' : 'inherit' }}>
-                          {selectedTxn.spendingDeviationScore !== undefined && selectedTxn.spendingDeviationScore !== null ? selectedTxn.spendingDeviationScore.toFixed(2) : 'N/A'}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.01)', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Velocity Score</div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, color: (selectedTxn.velocityScore || 0) > 10 ? 'var(--color-danger)' : 'inherit' }}>
-                          {selectedTxn.velocityScore !== undefined && selectedTxn.velocityScore !== null ? selectedTxn.velocityScore.toFixed(0) : 'N/A'}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.01)', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Geo Anomaly</div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, color: (selectedTxn.geoAnomalyScore || 0) > 0.8 ? 'var(--color-danger)' : 'inherit' }}>
-                          {selectedTxn.geoAnomalyScore !== undefined && selectedTxn.geoAnomalyScore !== null ? selectedTxn.geoAnomalyScore.toFixed(2) : 'N/A'}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {selectedCase && (
-                    <div style={{ 
-                      border: '1px solid var(--border-color)', 
-                      borderRadius: '8px', 
-                      padding: '0.75rem',
-                      background: 'rgba(0,0,0,0.1)',
-                      marginBottom: '1rem'
+                  {/* ── 1. Case Header ── */}
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+                    {/* Risk Gauge */}
+                    <div style={{
+                      minWidth: 64, height: 64, borderRadius: '50%',
+                      background: `conic-gradient(${riskColor} ${risk * 360}deg, rgba(255,255,255,0.05) 0deg)`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: `0 0 12px ${riskColor}44`
                     }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--color-primary)', textTransform: 'uppercase', marginBottom: '0.35rem' }}>AI Explanation</div>
-                      <div className="ai-reasoning" style={{ margin: 0 }}>
-                        {selectedCase.aiReasoning}
+                      <div style={{ width: 46, height: 46, borderRadius: '50%', background: '#080c17', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 800, color: riskColor, lineHeight: 1 }}>{riskPct}%</span>
+                        <span style={{ fontSize: '0.5rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Risk</span>
                       </div>
                     </div>
-                  )}
 
-                  {/* Actions Footer */}
-                  {selectedCase && selectedCase.status === "OPEN" && (
-                    <div className="actions-footer">
-                      <button 
-                        className="btn btn-secondary" 
-                        onClick={() => updateCaseStatus(selectedCase.id, "CLOSED")}
-                      >
-                        Dismiss Case
-                      </button>
-                      <button 
-                        className="btn btn-danger" 
-                        onClick={() => updateCaseStatus(selectedCase.id, "ACCOUNT_FROZEN")}
-                      >
-                        Freeze Account
-                      </button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>{selectedCase.transactionId}</span>
+                        <span className={`badge badge-${selectedCase.status.toLowerCase()}`}>{STATUS_LABELS[selectedCase.status] || selectedCase.status}</span>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                        Account <strong style={{ color: 'var(--text-primary)' }}>{selectedCase.accountId}</strong>
+                        {selectedUser && <> · {selectedUser.frequentLocations[0] || 'Unknown'} based user</>}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>Detected {timeAgo(selectedCase.detectedAt)}</div>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Right Workspace Panel: AI Investigator Console */}
-            <div className="column-content" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
-                <div className="column-title" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🤖 AI Investigator Console</div>
-                {selectedCase && (
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ padding: '0.25rem 0.65rem', fontSize: '0.65rem' }}
-                    onClick={() => triggerAgentInvestigation(selectedCase.id)}
-                    disabled={isInvestigating}
-                  >
-                    {isInvestigating ? 'Running...' : '▶ Run Agent'}
-                  </button>
-                )}
-              </div>
-
-              {selectedCase ? (
-                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                  <div className="tab-container" style={{ gap: '0.15rem' }}>
-                    <button className={`tab-btn ${aiInvestigatorTab === 'timeline' ? 'active' : ''}`} onClick={() => setAiInvestigatorTab('timeline')}>Timeline Trace</button>
-                    <button className={`tab-btn ${aiInvestigatorTab === 'report' ? 'active' : ''}`} onClick={() => setAiInvestigatorTab('report')}>Report Summary</button>
-                    <button className={`tab-btn ${aiInvestigatorTab === 'chat' ? 'active' : ''}`} onClick={() => setAiInvestigatorTab('chat')}>Copilot Chat</button>
-                    <button className={`tab-btn ${aiInvestigatorTab === 'audit' ? 'active' : ''}`} onClick={() => setAiInvestigatorTab('audit')}>Compliance Audit</button>
                   </div>
 
-                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    {aiInvestigatorTab === 'timeline' && (
-                      <div className="agent-trace-timeline">
-                        {(() => {
-                          try {
-                            const traceList = JSON.parse(selectedCase.agentTrace || '[]');
-                            if (traceList.length === 0) {
-                              return (
-                                <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem 1rem', fontSize: '0.75rem' }}>
-                                  {isInvestigating ? 'Agent is executing functions...' : 'No agent run trace. Click "Run Agent" to start.'}
-                                </div>
-                              );
-                            }
-                            return traceList.map((step: any, sIdx: number) => (
-                              <div key={sIdx} className="trace-step">
-                                <div className="trace-step-header">
-                                  <span>Step {sIdx}: {step.tool}</span>
-                                </div>
-                                {step.thought && (
-                                  <div style={{ fontSize: '0.7rem', color: '#60a5fa', fontStyle: 'italic', marginBottom: '0.25rem' }}>
-                                    <strong>Thought:</strong> {step.thought}
-                                  </div>
-                                )}
-                                <div className="trace-step-body">
-                                  {step.args && <div style={{ fontSize: '0.65rem', opacity: 0.8, color: 'var(--text-secondary)' }}><strong>Args:</strong> {step.args}</div>}
-                                  {step.result && <div style={{ fontSize: '0.65rem', color: '#10b981', marginTop: '0.15rem' }}><strong>Result:</strong> {step.result.substring(0, 300)}{step.result.length > 300 ? '...' : ''}</div>}
-                                </div>
-                              </div>
-                            ));
-                          } catch (e) {
-                            return <div style={{ fontSize: '0.75rem', color: 'var(--color-danger)' }}>Error parsing trace logs.</div>;
-                          }
-                        })()}
-                      </div>
-                    )}
+                  {/* ── 2. What Happened ── */}
+                  {selectedTxn && (
+                    <div style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: '0.9rem 1rem', marginBottom: '1rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: '#60a5fa', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>📖 What happened</div>
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-primary)', lineHeight: 1.55, margin: 0 }}>
+                        {generateFraudStory(selectedTxn, selectedUser)}
+                      </p>
+                    </div>
+                  )}
 
-                    {aiInvestigatorTab === 'report' && (
-                      <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.65rem', height: '100%', fontSize: '0.75rem' }}>
-                        {selectedCase.investigationReport ? (() => {
-                          try {
-                            const report = JSON.parse(selectedCase.investigationReport);
-                            const strengthColor = report.evidenceStrength === 'HIGH' ? 'var(--color-danger)' : report.evidenceStrength === 'MEDIUM' ? 'var(--color-warning)' : 'var(--color-primary)';
-                            return (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                  <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: strengthColor, color: 'white' }}>
-                                    Evidence: {report.evidenceStrength}
-                                  </span>
-                                  <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.05)' }}>
-                                    Recommended Action: {report.recommendedAction}
-                                  </span>
-                                </div>
-                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                                  <strong style={{ color: '#60a5fa' }}>Summary Findings:</strong>
-                                  <p style={{ margin: '0.25rem 0 0', lineHeight: '1.4' }}>{report.investigationSummary}</p>
-                                </div>
-                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                                  <strong style={{ color: '#60a5fa' }}>Audit Log Statement:</strong>
-                                  <p style={{ margin: '0.25rem 0 0', lineHeight: '1.4', fontStyle: 'italic' }}>{report.auditTrail}</p>
-                                </div>
-                                <div style={{ background: 'rgba(16, 185, 129, 0.08)', padding: '0.75rem', borderRadius: '6px', border: '1px dashed rgba(16, 185, 129, 0.3)' }}>
-                                  <strong style={{ color: '#10b981' }}>Customer Alert SMS:</strong>
-                                  <p style={{ margin: '0.25rem 0 0', lineHeight: '1.4' }}>"{report.customerMessage}"</p>
-                                </div>
-                              </div>
-                            );
-                          } catch (e) {
-                            return <div style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.1)' }}>{selectedCase.investigationReport}</div>;
-                          }
-                        })() : (
-                          <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem 1rem' }}>
-                            No autonomous agent report compiled. Run investigation first.
+                  {/* ── 3. Anomaly Signals ── */}
+                  {selectedTxn && selectedUser && (
+                    <div style={{ marginBottom: '1rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>⚠️ Anomaly Signals</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                        {[
+                          { label: 'Location', current: selectedTxn.location, baseline: `Usually: ${selectedUser.frequentLocations.slice(0,2).join(', ')}`, anomaly: isLocationMismatch },
+                          { label: 'Device', current: selectedTxn.deviceUsed, baseline: `Usually: ${selectedUser.frequentDevices.slice(0,2).join(', ')}`, anomaly: isDeviceMismatch },
+                          { label: 'Amount', current: `$${selectedTxn.amount.toFixed(2)}`, baseline: `Avg: $${selectedUser.averageTransactionValue.toFixed(0)}`, anomaly: isAmountAnomaly },
+                        ].map(({ label, current, baseline, anomaly }) => (
+                          <div key={label} style={{
+                            background: anomaly ? 'rgba(239,68,68,0.06)' : 'rgba(34,197,94,0.04)',
+                            border: `1px solid ${anomaly ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.15)'}`,
+                            borderRadius: 6, padding: '0.6rem 0.7rem'
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                              <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{label}</span>
+                              <span style={{ fontSize: '0.6rem', fontWeight: 700, color: anomaly ? '#ef4444' : '#22c55e' }}>
+                                {anomaly ? '⚠ Unusual' : '✓ Normal'}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: anomaly ? '#ef4444' : 'var(--text-primary)', marginBottom: '0.15rem' }}>{current}</div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{baseline}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── 4. AI Investigation ── */}
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>🤖 AI Agent Investigation</span>
+                        {isInvestigating && <span className="live-dot" />}
+                      </div>
+                      <button
+                        className="btn btn-primary"
+                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.65rem' }}
+                        onClick={() => triggerAgentInvestigation(selectedCase.id)}
+                        disabled={isInvestigating}
+                      >
+                        {isInvestigating ? 'Running…' : liveSteps.length > 0 || invSteps.length > 0 ? '🔄 Re-run' : '▶ Investigate'}
+                      </button>
+                    </div>
+
+                    {isInvestigating && <div className="investigating-bar" />}
+
+                    {/* Live streaming steps */}
+                    {(isInvestigating ? liveSteps : trace).length > 0 ? (
+                      <LiveInvestigationTimeline
+                        steps={isInvestigating ? liveSteps : trace}
+                        isLive={isInvestigating}
+                        expandedSteps={expandedSteps}
+                        setExpandedSteps={setExpandedSteps}
+                        liveEndRef={liveEndRef}
+                      />
+                    ) : !isInvestigating ? (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.01)', borderRadius: 8, border: '1px dashed var(--border-color)' }}>
+                        No investigation yet — click <strong>Investigate</strong> to watch the AI agent gather evidence in real time.
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* ── 5. Verdict ── */}
+                  {report && (
+                    <div style={{ marginBottom: '1rem', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{ background: 'rgba(239,68,68,0.08)', padding: '0.6rem 0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#f87171' }}>📋 Investigation Verdict</span>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <span style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem', borderRadius: 4, background: report.evidenceStrength === 'HIGH' ? '#ef4444' : report.evidenceStrength === 'MEDIUM' ? '#f59e0b' : '#3b82f6', color: 'white', fontWeight: 700 }}>
+                            {report.evidenceStrength} evidence
+                          </span>
+                          <span style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem', borderRadius: 4, border: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                            {(report.recommendedAction || '').replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ padding: '0.75rem 0.9rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <p style={{ fontSize: '0.78rem', color: 'var(--text-primary)', lineHeight: 1.5, margin: 0 }}>{report.investigationSummary}</p>
+                        {report.customerMessage && (
+                          <div style={{ background: 'rgba(34,197,94,0.05)', border: '1px dashed rgba(34,197,94,0.25)', borderRadius: 5, padding: '0.5rem 0.7rem' }}>
+                            <span style={{ fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', color: '#22c55e', display: 'block', marginBottom: '0.2rem' }}>📱 Customer SMS</span>
+                            <span style={{ fontSize: '0.73rem', color: 'var(--text-primary)', fontStyle: 'italic' }}>"{report.customerMessage}"</span>
                           </div>
                         )}
                       </div>
-                    )}
+                    </div>
+                  )}
 
-                    {aiInvestigatorTab === 'chat' && (
-                      <div className="chat-container">
+                  {/* ── 6. Actions ── */}
+                  {selectedCase.status === 'OPEN' && (
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => updateCaseStatus(selectedCase.id, 'CLOSED')}>Dismiss — Not Fraud</button>
+                      <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => updateCaseStatus(selectedCase.id, 'ACCOUNT_FROZEN')}>🔒 Freeze Account</button>
+                    </div>
+                  )}
+
+                  {/* ── 7. Analyst Copilot (collapsible) ── */}
+                  <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
+                    <button
+                      style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: 'none', padding: '0.6rem 0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 600 }}
+                      onClick={() => setChatExpanded(p => !p)}
+                    >
+                      <span>💬 Ask the AI Analyst</span>
+                      <span>{chatExpanded ? '▲' : '▼'}</span>
+                    </button>
+
+                    {chatExpanded && (
+                      <div className="chat-container" style={{ borderTop: '1px solid var(--border-color)' }}>
                         <div className="chat-messages">
                           <div className="chat-msg system">
-                            Incident Investigation Copilot active. Ask me about Case {selectedCase.transactionId}'s anomalies, baseline comparisons, or ask me to freeze the account.
+                            I'm your fraud investigation assistant. Ask me anything about case {selectedCase.transactionId} — I can explain the anomalies, check transaction history, or help you decide whether to freeze the account.
                           </div>
-                          {manualChatHistory.map((msg, msgIdx) => (
-                            <div key={msgIdx} className={`chat-msg ${msg.role}`}>
-                              {msg.content}
-                            </div>
+                          {manualChatHistory.map((msg, i) => (
+                            <div key={i} className={`chat-msg ${msg.role}`}>{msg.content}</div>
                           ))}
+                          <div ref={chatEndRef} />
                         </div>
                         <div className="chat-input-row">
                           <input
                             type="text"
-                            placeholder="Ask the copilot (e.g. 'Show transaction history')"
+                            placeholder="e.g. 'Is this user usually high-risk?' or 'Freeze the account'"
                             value={chatInput}
-                            onChange={(e) => setChatInput(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') sendChatMessage(); }}
+                            onChange={e => setChatInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') sendChatMessage(); }}
                           />
                           <button onClick={sendChatMessage} disabled={!chatInput.trim()}>Send</button>
                         </div>
                       </div>
                     )}
-
-                    {aiInvestigatorTab === 'audit' && (
-                      <div style={{ 
-                        background: '#040711', 
-                        color: '#38bdf8', 
-                        fontFamily: 'var(--font-mono)', 
-                        fontSize: '0.7rem', 
-                        padding: '0.75rem', 
-                        borderRadius: '6px', 
-                        height: '100%', 
-                        overflowY: 'auto' 
-                      }}>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                          {(() => {
-                            try {
-                              if (!selectedCase.regulatoryAuditRecord) return "No regulatory compliance trail generated.";
-                              const obj = JSON.parse(selectedCase.regulatoryAuditRecord);
-                              return JSON.stringify(obj, null, 2);
-                            } catch (e) {
-                              return selectedCase.regulatoryAuditRecord;
-                            }
-                          })()}
-                        </pre>
-                      </div>
-                    )}
                   </div>
+
                 </div>
-              ) : (
-                <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem', fontSize: '0.8rem' }}>
-                  Select an alert case to open the AI Investigator panel.
-                </div>
-              )}
-            </div>
+              );
+            })()}
           </section>
         </main>
       ) : (
-        <main className="dashboard-grid" style={{ gridTemplateColumns: selectedTxn ? '1fr 380px' : '1fr' }}>
-          {/* Full Screen Live Transaction Log */}
+        /* ── Transactions Page ── */
+        <main className="dashboard-grid" style={{ gridTemplateColumns: selectedTxn ? '1fr 360px' : '1fr' }}>
           <section className="column">
             <div className="column-header">
-              <h2 className="column-title">Real-Time Transactions Feed</h2>
-              <span className="stat-bubble">{totalCount.toLocaleString()} rows</span>
+              <h2 className="column-title">Live Transaction Feed</h2>
+              <span className="stat-bubble">{totalCount.toLocaleString()} total</span>
             </div>
             <div className="column-content" onScroll={handleScroll}>
               {transactions.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem', fontSize: '0.9rem' }}>
-                  No transaction data. Trigger live CSV feed to start.
+                  No transactions yet. Click "Stream Feed" to start.
                 </div>
               ) : (
                 <div className="table-container">
                   <table>
                     <thead>
                       <tr>
-                        <th>Time</th>
-                        <th>Txn ID</th>
-                        <th>Account</th>
-                        <th>Amount</th>
-                        <th>Location</th>
-                        <th>Device Used</th>
-                        <th>Category</th>
-                        <th>Flags</th>
+                        <th>Time</th><th>Txn ID</th><th>Account</th><th>Amount</th>
+                        <th>Location</th><th>Device</th><th>Category</th><th>Flags</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {transactions.slice(0, visibleCount).map((t) => {
+                      {transactions.slice(0, visibleCount).map(t => {
                         const flags = getFlagDetails(t);
-                        const isSelected = selectedTxn?.transactionId === t.transactionId;
                         return (
-                          <tr 
+                          <tr
                             key={t.transactionId}
-                            className={`${t.isFraud ? 'fraud' : ''} ${isSelected ? 'active' : ''}`}
+                            className={`${t.isFraud ? 'fraud' : ''} ${selectedTxn?.transactionId === t.transactionId ? 'active' : ''}`}
                             onClick={() => {
                               setSelectedTxn(t);
-                              const matchingCase = cases.find(c => c.transactionId === t.transactionId);
-                              if (matchingCase) {
-                                setSelectedCase(matchingCase);
-                                setSelectedUser(usersMap[matchingCase.accountId] || null);
-                              } else {
-                                setSelectedCase(null);
-                                setSelectedUser(usersMap[t.senderAccount] || null);
-                              }
+                              const mc = cases.find(c => c.transactionId === t.transactionId);
+                              if (mc) { setSelectedCase(mc); setSelectedUser(usersMap[mc.accountId] || null); }
+                              else { setSelectedCase(null); setSelectedUser(usersMap[t.senderAccount] || null); }
                             }}
                           >
-                            <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                              {t.timestamp.split('T')[1]?.substring(0, 8) || t.timestamp}
-                            </td>
+                            <td style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{t.timestamp.split('T')[1]?.substring(0, 8) || t.timestamp}</td>
                             <td style={{ fontWeight: 600 }}>{t.transactionId}</td>
                             <td style={{ fontFamily: 'var(--font-mono)' }}>{t.senderAccount}</td>
-                            <td style={{ fontWeight: 700, color: t.isFraud ? 'var(--color-danger)' : 'inherit' }}>
-                              ${t.amount.toFixed(2)}
-                            </td>
+                            <td style={{ fontWeight: 700, color: t.isFraud ? 'var(--color-danger)' : 'inherit' }}>${t.amount.toFixed(2)}</td>
                             <td>{t.location}</td>
                             <td style={{ textTransform: 'capitalize' }}>{t.deviceUsed}</td>
                             <td style={{ color: 'var(--text-secondary)' }}>{t.merchantCategory}</td>
                             <td>
-                              {flags.count > 0 ? (
-                                <span className={`flag-pill ${flags.count >= 2 ? 'alert' : 'warn'}`}>
-                                  {flags.count} {flags.count === 1 ? 'Flag' : 'Flags'}
-                                </span>
-                              ) : (
-                                <span className="flag-pill zero">0 Flags</span>
-                              )}
+                              <span className={`flag-pill ${flags.count >= 2 ? 'alert' : flags.count === 1 ? 'warn' : 'zero'}`}>
+                                {flags.count} {flags.count === 1 ? 'Flag' : 'Flags'}
+                              </span>
                             </td>
                           </tr>
                         );
@@ -845,72 +782,45 @@ function App() {
             </div>
           </section>
 
-          {/* Quick Drawer Panel for Transaction Baseline Verification */}
           {selectedTxn && (
             <section className="column" style={{ background: '#0a0e1a', borderLeft: '1px solid var(--border-color)' }}>
-              <div className="column-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h2 className="column-title">Inspect Details</h2>
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.65rem' }}
-                  onClick={() => { setSelectedTxn(null); setSelectedCase(null); }}
-                >
-                  Close
-                </button>
+              <div className="column-header" style={{ justifyContent: 'space-between' }}>
+                <h2 className="column-title">Transaction Detail</h2>
+                <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.65rem' }} onClick={() => { setSelectedTxn(null); setSelectedCase(null); }}>✕ Close</button>
               </div>
               <div className="column-content" style={{ padding: '1rem' }}>
-                <div style={{ marginBottom: '1.25rem' }}>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedTxn.transactionId}</h3>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Type: {selectedTxn.transactionType} | Category: {selectedTxn.merchantCategory}</p>
-                </div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.25rem' }}>{selectedTxn.transactionId}</h3>
+                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{selectedTxn.transactionType} · {selectedTxn.merchantCategory}</p>
 
-                <div className="section-title">Baseline Verification</div>
                 {selectedUser ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                      <strong>Cardholder:</strong> {selectedUser.name} (Acc: {selectedUser.accountId})
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <div className={`compare-box ${isLocationMismatch ? 'mismatch' : ''}`}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', fontWeight: 700 }}>
-                          <span>Location</span>
-                          <span>{isLocationMismatch ? '❌ ANOMALY' : '✅ MATCH'}</span>
+                  <>
+                    <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Baseline Check</div>
+                    {[
+                      { label: 'Location', current: selectedTxn.location, baseline: selectedUser.frequentLocations.join(', '), anomaly: isLocationMismatch },
+                      { label: 'Device', current: selectedTxn.deviceUsed, baseline: selectedUser.frequentDevices.join(', '), anomaly: isDeviceMismatch },
+                      { label: 'Amount', current: `$${selectedTxn.amount.toFixed(2)}`, baseline: `Avg $${selectedUser.averageTransactionValue.toFixed(0)}`, anomaly: isAmountAnomaly },
+                    ].map(({ label, current, baseline, anomaly }) => (
+                      <div key={label} className={`compare-box ${anomaly ? 'mismatch' : ''}`} style={{ marginBottom: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 700, marginBottom: '0.15rem' }}>
+                          <span>{label}</span>
+                          <span style={{ color: anomaly ? '#ef4444' : '#22c55e' }}>{anomaly ? '⚠ Unusual' : '✓ Normal'}</span>
                         </div>
-                        <div className="compare-val" style={{ margin: '0.15rem 0', fontSize: '0.75rem' }}>{selectedTxn.location}</div>
-                        <div style={{ fontSize: '0.65rem', opacity: 0.8 }}>Baseline: {selectedUser.frequentLocations.join(', ')}</div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 600 }}>{current}</div>
+                        <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>Baseline: {baseline}</div>
                       </div>
-
-                      <div className={`compare-box ${isDeviceMismatch ? 'mismatch' : ''}`}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', fontWeight: 700 }}>
-                          <span>Device</span>
-                          <span>{isDeviceMismatch ? '❌ ANOMALY' : '✅ MATCH'}</span>
-                        </div>
-                        <div className="compare-val" style={{ margin: '0.15rem 0', fontSize: '0.75rem' }}>{selectedTxn.deviceUsed}</div>
-                        <div style={{ fontSize: '0.65rem', opacity: 0.8 }}>Baseline: {selectedUser.frequentDevices.join(', ')}</div>
-                      </div>
-
-                      <div className={`compare-box ${isAmountAnomaly ? 'mismatch' : ''}`}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', fontWeight: 700 }}>
-                          <span>Amount</span>
-                          <span>{isAmountAnomaly ? '❌ ANOMALY' : '✅ MATCH'}</span>
-                        </div>
-                        <div className="compare-val" style={{ margin: '0.15rem 0', fontSize: '0.75rem' }}>${selectedTxn.amount.toFixed(2)}</div>
-                        <div style={{ fontSize: '0.65rem', opacity: 0.8 }}>Avg: ${selectedUser.averageTransactionValue.toFixed(2)}</div>
-                      </div>
-                    </div>
-                  </div>
+                    ))}
+                  </>
                 ) : (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                    Baseline behavior not compiled for this bulk cardholder (Acc: {selectedTxn.senderAccount}).
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                    No behavioral baseline for account {selectedTxn.senderAccount}.
                   </div>
                 )}
 
                 {selectedCase && (
-                  <div style={{ marginTop: '1.25rem' }}>
-                    <span className="badge badge-open" style={{ marginBottom: '0.5rem' }}>🚨 Linked Alert Incident</span>
+                  <div style={{ marginTop: '1rem' }}>
+                    <span className="badge badge-open" style={{ display: 'inline-block', marginBottom: '0.4rem' }}>🚨 Linked Alert</span>
                     <div className="ai-reasoning">
-                      <strong>AI Flag Reasoning:</strong>
-                      <p style={{ marginTop: '0.25rem', lineHeight: '1.3' }}>{selectedCase.aiReasoning}</p>
+                      <p style={{ margin: 0, lineHeight: 1.4 }}>{selectedCase.aiReasoning}</p>
                     </div>
                   </div>
                 )}
