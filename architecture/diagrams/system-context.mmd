@@ -1,0 +1,11 @@
+flowchart LR
+    analyst["Fraud analyst"]
+    toolUser["MCP client"]
+    fraudShield["FraudShield"]
+    mongo[("MongoDB")]
+    vertex["Vertex AI / Gemini"]
+
+    analyst -->|"Browser UI · start ingestion and investigate cases"| fraudShield
+    toolUser -->|"MCP over stdio · invoke investigation tools"| fraudShield
+    fraudShield -->|"MongoDB driver · store and query fraud data"| mongo
+    fraudShield -->|"HTTPS · analyze suspicious transactions"| vertex

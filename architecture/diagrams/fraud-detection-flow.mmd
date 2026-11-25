@@ -1,0 +1,47 @@
+sequenceDiagram
+    actor Analyst
+    participant Dashboard as React dashboard
+    participant Backend as Spring Boot API
+    participant Ingest as Ingestion executor
+    participant Mongo as MongoDB
+    participant Analysis as Gemini executor
+    participant Vertex as Vertex AI / Gemini
+
+    Dashboard->>Backend: WebSocket handshake at /ws/stream
+    Analyst->>Dashboard: Select Stream Feed
+    Dashboard->>Backend: HTTP POST /api/ingest/start
+    Backend-)Ingest: Submit ingestion work if idle
+    Backend-->>Dashboard: HTTP 200 start acknowledgement
+
+    Ingest->>Mongo: Look up transaction by ID
+    alt Transaction already exists
+        Ingest->>Mongo: Save using the existing document ID
+    else New validated transaction
+        Ingest->>Ingest: Check sender baseline and anomaly rules
+        opt Suspected fraud with a sender baseline
+            Ingest->>Mongo: Save OPEN case with pending analysis
+            Ingest--)Dashboard: WebSocket FRAUD_CASE
+            Ingest-)Analysis: Submit background analysis
+        end
+        par Foreground transaction persistence
+            Ingest->>Mongo: Save transaction
+            Ingest--)Dashboard: WebSocket TRANSACTION
+        and Background enrichment if submitted
+            Analysis->>Mongo: Read recent clean sender history
+            opt Vertex AI configured and credentials available
+                Analysis->>Vertex: HTTPS generateContent with transaction context
+                Vertex-->>Analysis: Analysis result or request failure
+            end
+            opt Vertex request unavailable or failed
+                Analysis->>Analysis: Generate simulated analysis
+            end
+            Analysis->>Mongo: Reload the saved fraud case
+            opt Saved case still exists
+                opt Risk score above 0.7
+                    Analysis->>Backend: Call Java investigation agent in process
+                end
+                Analysis->>Mongo: Save case analysis
+                Analysis--)Dashboard: WebSocket CASE_UPDATE
+            end
+        end
+    end

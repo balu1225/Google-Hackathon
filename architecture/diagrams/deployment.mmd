@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph localSetup["Local Compose setup"]
+        localBrowser["Local browser"]
+        localFrontend["Nginx frontend · localhost:5173"]
+        localBackend["Spring Boot backend · localhost:8080"]
+        localMongo[("Configured MongoDB endpoint")]
+
+        localBrowser -->|"HTTP · load dashboard"| localFrontend
+        localBrowser -->|"HTTP and WebSocket · API and stream"| localBackend
+        localBackend -->|"MongoDB driver · read and write"| localMongo
+    end
+
+    subgraph cloudSetup["Google Cloud deployment configuration"]
+        cloudBuild["Google Cloud Build"]
+        images["Image registry · gcr.io image references"]
+        cloudBrowser["Analyst browser"]
+        cloudFrontend["Cloud Run · fraudshield-frontend"]
+        cloudBackend["Cloud Run · fraudshield-backend"]
+        cloudMongo[("MongoDB Atlas endpoint")]
+        vertex["Vertex AI / Gemini"]
+
+        cloudBuild -->|"Docker builds · publish frontend and backend images"| images
+        cloudFrontend -->|"Cloud Run image pull · start Nginx frontend"| images
+        cloudBackend -->|"Cloud Run image pull · start Spring Boot backend"| images
+        cloudBrowser -->|"HTTPS · load dashboard"| cloudFrontend
+        cloudBrowser -->|"HTTPS and WSS · API and stream"| cloudBackend
+        cloudBackend -->|"MongoDB driver · read and write"| cloudMongo
+        cloudBackend -->|"HTTPS · call Gemini"| vertex
+    end

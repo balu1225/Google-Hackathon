@@ -1,0 +1,15 @@
+flowchart LR
+    client["MCP client"]
+    dashboard["React dashboard"]
+    mcp["Python FastMCP server"]
+    backend["Spring Boot backend"]
+    mongo[("MongoDB")]
+    vertex["Vertex AI / Gemini 2.5 Flash"]
+
+    dashboard -->|"HTTP(S) /api · start ingestion and manage cases"| backend
+    backend -->|"WebSocket /ws/stream · push transactions and case updates"| dashboard
+    backend -->|"Spring Data MongoDB · read baselines and persist results"| mongo
+    backend -->|"HTTPS · request Gemini analysis"| vertex
+    client -->|"MCP over stdio · invoke tools"| mcp
+    mcp -->|"REST via httpx · case operations and baseline lookup"| backend
+    mcp -->|"PyMongo · query and aggregate transactions"| mongo
